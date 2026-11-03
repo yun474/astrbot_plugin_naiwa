@@ -153,6 +153,7 @@ class Settings:
     command_prefix: str = ""
     material_usage_command: bool = True
     material_cache_minutes: int = 0
+    extra_asset_mirrors: tuple = ()
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
@@ -221,6 +222,16 @@ class Settings:
                     values[key] = json.loads(values[key])
                 except ValueError:
                     raise NaiwaError(f"配置 {key} 必须是合法 JSON。") from None
+        mirrors = values.get("extra_asset_mirrors", ())
+        if not isinstance(mirrors, (list, tuple)) or any(not isinstance(m, str) for m in mirrors):
+            raise NaiwaError("额外下载加速地址必须是文本列表。")
+        prefixes = []
+        for mirror in filter(None, (m.strip() for m in mirrors)):
+            if not mirror.startswith(("https://", "http://")):
+                raise NaiwaError("额外下载加速地址必须以 http:// 或 https:// 开头。")
+            # 加速地址按「前缀 + GitHub 原始地址」拼接，统一补上结尾斜杠。
+            prefixes.append(mirror if mirror.endswith("/") else mirror + "/")
+        values["extra_asset_mirrors"] = tuple(prefixes)
         obj = cls(**values)
         if not isinstance(obj.display, dict) or any(
             key not in {"draw", "atlas", "pen", "ranking"} or type(value) is not bool

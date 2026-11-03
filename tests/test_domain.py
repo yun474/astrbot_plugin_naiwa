@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import json
 import sqlite3
@@ -11,7 +12,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
-from core.catalog import initialize_catalog, read_catalog
+from core.catalog import build_catalog, load_official
 from core.config import NaiwaError, Settings
 from core.database import Database
 from core.diagnostics import safe_detail
@@ -22,6 +23,11 @@ from core.views import collection_message, keyboard, md, ranking_message, today_
 ATLAS_LEFT = (1080 - (8 * 108 + 7 * 12)) // 2
 
 
+def read_catalog(root):
+    """测试图库全部写在自定义层，官方名单为空。"""
+    return build_catalog(root, ()).items
+
+
 class DomainTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -29,7 +35,7 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
         self.db = Database(self.root)
         await self.db.initialize()
         (self.root / "catalog" / "images").mkdir(parents=True)
-        self.manifest = self.root / "catalog" / "naiwa.json"
+        self.manifest = self.root / "catalog" / "custom.json"
         self.write_catalog(["item", "cat"])
         await self.db.catalog(read_catalog(self.root))
         self.user = await self.db.identify("app", "member", "group-a", "昵称")
@@ -440,19 +446,16 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
             last.keyboard["content"]["rows"][-1]["buttons"][0]["action"]["data"], "奶蛙图鉴 1"
         )
 
-    async def test_all_bundled_assets_validate_and_existing_catalog_is_preserved(self):
+    def test_bundled_official_manifest_fallback_and_legacy_table_agree(self):
         resources = Path(__file__).resolve().parents[1] / "resources"
-        other = self.root / "bundled"
-        initialize_catalog(other, resources)
-        definitions = read_catalog(other)
-        self.assertEqual(len(definitions), 120)
-        self.assertEqual(definitions[0]["id"], "nw-8-018")
-        manifest = other / "catalog" / "naiwa.json"
-        original = manifest.read_text("utf-8")
-        manifest.write_text("[]", "utf-8")
-        initialize_catalog(other, resources)
-        self.assertEqual(manifest.read_text("utf-8"), "[]")
-        manifest.write_text(original, "utf-8")
+        official = load_official(resources)
+        self.assertEqual(len(official.items), 120)
+        self.assertEqual(official.items[0]["id"], "nw-8-018")
+        self.assertFalse((resources / "images").exists())
+        fallback = (resources / "fallback" / "nw-8-018.jpg").read_bytes()
+        self.assertEqual(hashlib.sha256(fallback).hexdigest(), official.items[0]["sha256"])
+        legacy = json.loads((resources / "legacy.json").read_text("utf-8"))
+        self.assertEqual(set(legacy), {item["id"] for item in official.items})
 
 
 class ConfigAndButtonsTests(unittest.TestCase):

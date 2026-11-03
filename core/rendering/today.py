@@ -73,7 +73,7 @@ def render_today(
     canvas = Canvas(root, WIDTH, footer + 48)
     canvas.glow((WIDTH // 2, FRAME_TOP + frame_h // 2), max(art.width, art.height) * 0.6, 34)
 
-    canvas.text("今日奶娃", (PAD - 4, 60), 80, YELLOW_L, 800)
+    canvas.text("今日奶蛙", (PAD - 4, 60), 80, YELLOW_L, 800)
     canvas.text(short_day(result["day"]), (WIDTH - PAD, 128), 26, OVERLAY2, 500, "rs")
 
     # 画框：投影、金边与内衬细线

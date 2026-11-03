@@ -56,7 +56,7 @@ class MaterialAccount:
     pending: dict[str, PendingDelete] = field(default_factory=dict)
     # 引用计数：每条发送中的消息和每个缓存条目各占一次，归零后才进入删除队列。
     active: dict[str, int] = field(default_factory=dict)
-    # 按图片内容 MD5 缓存的奶娃图素材，只在本进程内有效。
+    # 按图片内容 MD5 缓存的奶蛙图素材，只在本进程内有效。
     cache: dict[str, CachedImage] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

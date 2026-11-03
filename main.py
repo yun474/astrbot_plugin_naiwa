@@ -35,7 +35,7 @@ MAX_INFLIGHT = 12
 REQUEST_TIMEOUT = 240
 
 
-@register("astrbot_plugin_naiwa", "yun474", "每天抽一只奶娃的收藏插件", "1.0.0")
+@register("astrbot_plugin_naiwa", "yun474", "每天抽一只奶蛙的收藏插件", "1.0.0")
 class NaiwaPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -115,7 +115,7 @@ class NaiwaPlugin(Star):
         if not event.get_group_id() or (
             official and not isinstance(event.message_obj.raw_message, GroupMessage)
         ):
-            await self._send_native(event, event.plain_result("今日奶娃请在群聊中使用。"))
+            await self._send_native(event, event.plain_result("今日奶蛙请在群聊中使用。"))
             return
         event.stop_event()
         if self.stopping:
@@ -136,7 +136,7 @@ class NaiwaPlugin(Star):
             # 突发请求不能再堆积出无上限的繁忙提示队列。
             if self.busy_notice is None or self.busy_notice.done():
                 self.busy_notice = asyncio.create_task(
-                    self._failure(event, "奶娃正在处理请求，请等当前请求完成后再试。")
+                    self._failure(event, "奶蛙正在处理请求，请等当前请求完成后再试。")
                 )
                 await asyncio.shield(self.busy_notice)
             return
@@ -223,7 +223,7 @@ class NaiwaPlugin(Star):
             elif command == "ranking":
                 kind = args[0]
                 if kind not in {"种类", "数量"}:
-                    raise NaiwaError("用法：奶娃排行 种类/数量")
+                    raise NaiwaError("用法：奶蛙排行 种类/数量")
                 boards = await self.db.rankings(app_id, event.get_group_id())
                 # OneBot 的发送者 ID 就是 QQ 号；其他平台没有可获取的 QQ 头像。
                 onebot = not official and event.get_platform_name() == "aiocqhttp"
@@ -245,7 +245,7 @@ class NaiwaPlugin(Star):
                     items = await asyncio.to_thread(read_catalog, self.root)
                     await self.db.catalog(items)
                 message = Message(
-                    f"图库重载完成，当前启用 {sum(p['enabled'] for p in items)} 种奶娃。"
+                    f"图库重载完成，当前启用 {sum(p['enabled'] for p in items)} 种奶蛙。"
                 )
             elif command == "backup":
                 async with self.maintenance_lock:
@@ -253,7 +253,7 @@ class NaiwaPlugin(Star):
                 message = Message("备份已保存到插件数据目录 backups，包含数据库、图库及历史素材。")
             elif command == "material":
                 if not official:
-                    raise NaiwaError("奶娃素材库仅用于查看 QQ 官方机器人的素材库占用。")
+                    raise NaiwaError("奶蛙素材库仅用于查看 QQ 官方机器人的素材库占用。")
                 action = args[0]
                 if action in {"删除", "删除缓存", "删除全部"}:
                     result = await self.material.purge(
@@ -261,7 +261,7 @@ class NaiwaPlugin(Star):
                     )
                     message = purge_message(result, action == "删除全部")
                 elif action:
-                    raise NaiwaError("用法：奶娃素材库 [删除缓存|删除全部]")
+                    raise NaiwaError("用法：奶蛙素材库 [删除缓存|删除全部]")
                 else:
                     usage = await self.material.usage(event, app_id, deadline)
                     message = material_message(
@@ -269,12 +269,12 @@ class NaiwaPlugin(Star):
                     )
             else:
                 if not official:
-                    raise NaiwaError("奶娃诊断仅用于检查 QQ 官方机器人的图片转存链路。")
+                    raise NaiwaError("奶蛙诊断仅用于检查 QQ 官方机器人的图片转存链路。")
                 self.settings.check_host()
                 progress = await self.db.collection(user["id"])
                 item = next(p for p in progress["entries"] if p["enabled"])
                 message = Message(
-                    "# 图片链路检查\n\n![诊断奶娃 #192px #192px]({{image:0}})\n\nQQ 图片转存检查已通过。",
+                    "# 图片链路检查\n\n![诊断奶蛙 #192px #192px]({{image:0}})\n\nQQ 图片转存检查已通过。",
                     (self.root / "assets" / item["asset"],),
                 )
             if official:
@@ -350,51 +350,51 @@ class NaiwaPlugin(Star):
         except Exception as exc:
             logger.warning("[naiwa] Could not send failure notice (%s).", type(exc).__name__)
 
-    @filter.command("今日奶娃", alias={"抽奶娃"})
+    @filter.command("今日奶蛙", alias={"抽奶蛙"})
     async def draw(self, event: AstrMessageEvent):
-        """每天领一只奶娃，跨群共享收藏；当天重复使用会返回同一只。"""
+        """每天领一只奶蛙，跨群共享收藏；当天重复使用会返回同一只。"""
         await self._handle(event, "draw")
 
-    @filter.command("奶娃图鉴")
+    @filter.command("奶蛙图鉴")
     async def atlas(self, event: AstrMessageEvent, page: int = 1):
-        """查看奶娃图鉴和解锁进度。"""
+        """查看奶蛙图鉴和解锁进度。"""
         await self._handle(event, "atlas", (page,))
 
     @filter.command("我的展柜")
     async def pen(self, event: AstrMessageEvent, page: int = 1):
-        """查看已收藏的奶娃及数量。"""
+        """查看已收藏的奶蛙及数量。"""
         await self._handle(event, "pen", (page,))
 
-    @filter.command("奶娃排行")
+    @filter.command("奶蛙排行")
     async def ranking(self, event: AstrMessageEvent, kind: str = "种类"):
         """查看本群玩家的种类、数量双榜，各前十。"""
         await self._handle(event, "ranking", (kind,))
 
-    @filter.command("奶娃称呼")
+    @filter.command("奶蛙称呼")
     async def alias(self, event: AstrMessageEvent, name: str):
-        """设置 1–24 字的展示称呼。用法：奶娃称呼 名字；不会改变收藏归属。"""
+        """设置 1–24 字的展示称呼。用法：奶蛙称呼 名字；不会改变收藏归属。"""
         await self._handle(event, "alias", (name,))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("奶娃重载")
+    @filter.command("奶蛙重载")
     async def reload(self, event: AstrMessageEvent):
         """仅管理员：校验并重载图库；校验失败时保留上一份有效图库。"""
         await self._handle(event, "reload")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("奶娃备份")
+    @filter.command("奶蛙备份")
     async def backup(self, event: AstrMessageEvent):
         """仅管理员：将数据库、图库和历史素材备份到本地 backups 目录。"""
         await self._handle(event, "backup")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("奶娃诊断")
+    @filter.command("奶蛙诊断")
     async def diagnose(self, event: AstrMessageEvent):
-        """仅管理员：绕过缓存上传测试奶娃图，发送消息并检查 QQ 图片转存链路。"""
+        """仅管理员：绕过缓存上传测试奶蛙图，发送消息并检查 QQ 图片转存链路。"""
         await self._handle(event, "diagnose")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("奶娃素材库")
+    @filter.command("奶蛙素材库")
     async def material_usage(self, event: AstrMessageEvent, action: str = ""):
         """仅管理员：查看 QQ 素材库占用；附加「删除缓存」删除本插件素材，「删除全部」清空素材库。"""
         # 开关关闭时不拦截事件，同名指令可交由其他插件处理。

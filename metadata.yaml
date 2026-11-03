@@ -1,6 +1,6 @@
 name: astrbot_plugin_naiwa
-display_name: 今日奶娃
-desc: 每天抽一只奶娃：名画、场景与梗图收藏，跨群图鉴和排行；QQ 官方机器人支持 Markdown 与图床，其他平台群聊直接发卡片图。
+display_name: 今日奶蛙
+desc: 每天抽一只奶蛙：名画、场景与梗图收藏，跨群图鉴和排行；QQ 官方机器人支持 Markdown 与图床，其他平台群聊直接发卡片图。
 version: "1.0.0"
 author: yun474
 repo: "https://github.com/yun474/astrbot_plugin_naiwa"

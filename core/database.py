@@ -196,7 +196,7 @@ class Database:
                     "SELECT * FROM items WHERE enabled=1 ORDER BY id"
                 ).fetchall()
                 if not available:
-                    raise NaiwaError("图库没有启用的奶娃，请联系管理员检查。")
+                    raise NaiwaError("图库没有启用的奶蛙，请联系管理员检查。")
                 owned_ids = {
                     row[0]
                     for row in conn.execute(

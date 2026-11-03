@@ -9,7 +9,7 @@
 
 | 编号 | 名称 | 来源 | 原图 |
 | --- | --- | --- | --- |
-| nw-8-018 | 奶娃 | 奶蛙艺术圣殿 | [原图](https://raw.githubusercontent.com/Nailong-Studio/NaiLoong-Universe/main/docs/assets/l-18.webp) |
+| nw-8-018 | 奶蛙 | 奶蛙艺术圣殿 | [原图](https://raw.githubusercontent.com/Nailong-Studio/NaiLoong-Universe/main/docs/assets/l-18.webp) |
 | nw-1-001 | 大天使长的最后审判 | 奶蛙艺术圣殿 | [原图](https://raw.githubusercontent.com/Nailong-Studio/NaiLoong-Universe/main/docs/assets/classic-archangel-judgment.webp) |
 | nw-1-002 | 天使向奶蛙显现 | 奶蛙艺术圣殿 | [原图](https://raw.githubusercontent.com/Nailong-Studio/NaiLoong-Universe/main/docs/assets/classic-angel-apparition.webp) |
 | nw-1-003 | 天启四奶蛙 | 奶蛙艺术圣殿 | [原图](https://raw.githubusercontent.com/Nailong-Studio/NaiLoong-Universe/main/docs/assets/classic-four-horsemen.webp) |

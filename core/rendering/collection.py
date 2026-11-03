@@ -1,4 +1,4 @@
-"""奶娃图鉴与我的展柜。"""
+"""奶蛙图鉴与我的展柜。"""
 
 import math
 from pathlib import Path
@@ -52,7 +52,7 @@ def render_collection(
         left = (WIDTH - (columns * PEN_W + (columns - 1) * PEN_GAP)) // 2
     bottom = top + rows * step_y + 10
     canvas = Canvas(root, WIDTH, bottom + 86)
-    canvas.header("奶娃图鉴" if atlas else "我的展柜", name)
+    canvas.header("奶蛙图鉴" if atlas else "我的展柜", name)
 
     if atlas:
         canvas.draw.rounded_rectangle((PAD, 196, WIDTH - PAD, 316), radius=28, fill=SURFACE0)
@@ -77,7 +77,7 @@ def render_collection(
                 x = PAD + column * index
                 canvas.draw.line((x, 232, x, 310), fill=SURFACE1, width=2)
         canvas.progress(PAD + 40, WIDTH - PAD - 40, 346, ratio, 12)
-        canvas.text("收藏的奶娃", (PAD, 428), 28, CREAM, 800, "lm")
+        canvas.text("收藏的奶蛙", (PAD, 428), 28, CREAM, 800, "lm")
         canvas.text(f"共 {progress['species']} 种", (WIDTH - PAD, 428), 22, OVERLAY2, anchor="rm")
 
     for index, entry in enumerate(entries):
@@ -112,7 +112,7 @@ def render_collection(
         canvas.text(count, (x + PEN_W / 2, y + 228), 20, YELLOW, 700, "mt", width=PEN_W - 24)
 
     if not entries:
-        message = "暂无可展示的奶娃" if atlas else "展柜还是空的，先抽一只今日奶娃吧。"
+        message = "暂无可展示的奶蛙" if atlas else "展柜还是空的，先抽一只今日奶蛙吧。"
         canvas.text(message, (WIDTH / 2, top + 70), 26, OVERLAY2, anchor="mm")
     footer(
         canvas,

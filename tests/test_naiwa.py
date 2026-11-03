@@ -90,9 +90,9 @@ class NaiwaMessageTests(unittest.TestCase):
         self.assertEqual(image_size({"width": 0, "height": 0}), (640, 640))
         user = {"id": 1, "open_id": "member"}
         text = today_message(Settings(), self.root, user, self.result(), self.progress).text
-        self.assertIn("### 今日奶娃 · 第 3 次相遇", text)
+        self.assertIn("### 今日奶蛙 · 第 3 次相遇", text)
         self.assertIn("**捧腹大笑** · 伍·咏颂", text)
-        self.assertIn("![奶娃 #480px #640px]", text)
+        self.assertIn("![奶蛙 #480px #640px]", text)
         self.assertIn("\n\n> 你笑了。\n\n", text)
         self.assertNotIn(">\n>", text)
 

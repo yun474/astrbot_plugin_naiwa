@@ -117,5 +117,5 @@ def read_catalog(data_dir: Path) -> list[dict]:
             }
         )
     if not any(p["enabled"] for p in validated):
-        raise NaiwaError("至少保留一件启用的奶娃；本次重载未生效。")
+        raise NaiwaError("至少保留一件启用的奶蛙；本次重载未生效。")
     return validated

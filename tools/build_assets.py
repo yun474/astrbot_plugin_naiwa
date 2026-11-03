@@ -1,4 +1,4 @@
-"""根据整理好的奶娃清单生成内置素材。
+"""根据整理好的奶蛙清单生成内置素材。
 
 用法：
     python tools/build_assets.py 清单.json [--cache 原图缓存目录]

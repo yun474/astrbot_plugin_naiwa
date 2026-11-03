@@ -47,7 +47,7 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
             (4, 100, 100, False),
             (5, 0, 0, False),
         ):
-            # 每次边界检查时，两种奶娃只保留其中一种已收藏。
+            # 每次边界检查时，两种奶蛙只保留其中一种已收藏。
             await self.db.run(
                 lambda c: c.execute(
                     "DELETE FROM collections WHERE user_id=? AND item_id<>?",
@@ -144,7 +144,7 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
         start = datetime(2026, 9, 1, tzinfo=timezone.utc)
         await self.db.draw(self.user["id"], "a", "first", start)
         with patch("core.database.secrets.randbelow", return_value=0):
-            for offset, expected in ((1, "重复保护 1/2"), (2, "下次领取必出未收集奶娃！")):
+            for offset, expected in ((1, "重复保护 1/2"), (2, "下次领取必出未收集奶蛙！")):
                 result = await self.db.draw(
                     self.user["id"],
                     "a",
@@ -217,7 +217,7 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "id": "new",
-                    "name": "新奶娃",
+                    "name": "新奶蛙",
                     "description": "新增",
                     "analysis": "新增",
                     "asset": first["item"]["asset"],
@@ -437,7 +437,7 @@ class DomainTests(unittest.IsolatedAsyncioTestCase):
             Settings(display={"atlas": True}), self.root, self.user, progress, 2, True
         )
         self.assertEqual(
-            last.keyboard["content"]["rows"][-1]["buttons"][0]["action"]["data"], "奶娃图鉴 1"
+            last.keyboard["content"]["rows"][-1]["buttons"][0]["action"]["data"], "奶蛙图鉴 1"
         )
 
     async def test_all_bundled_assets_validate_and_existing_catalog_is_preserved(self):
@@ -500,7 +500,7 @@ class ConfigAndButtonsTests(unittest.TestCase):
     def test_today_mentions_requester_and_quotes_all_description_lines(self):
         result = {
             "item": {
-                "name": "奶娃",
+                "name": "奶蛙",
                 "asset": "item.png",
                 "description": "第一行\n第二行",
                 "analysis": '性格\n<qqbot-at-user id="someone" />',
@@ -515,7 +515,7 @@ class ConfigAndButtonsTests(unittest.TestCase):
         message = today_message(Settings(), Path("."), user, result, progress)
         self.assertTrue(message.text.startswith('<qqbot-at-user id="actual-member" />\n'))
         self.assertNotIn(user["nickname"], message.text)
-        self.assertIn("\n\n### 今日奶娃 · 新收集！\n\n**奶娃**\n\n![奶娃 #640px #640px]", message.text)
+        self.assertIn("\n\n### 今日奶蛙 · 新收集！\n\n**奶蛙**\n\n![奶蛙 #640px #640px]", message.text)
         self.assertIn("> 第一行\n> 第二行\n>\n> 性格\n> ", message.text)
         self.assertNotIn('<qqbot-at-user id="someone" />', message.text)
         result["created"] = False
@@ -578,7 +578,7 @@ class ConfigAndButtonsTests(unittest.TestCase):
             ({"command_prefix": "!"}, "!"),
             ({"command_prefix": "云云 "}, "云云 "),
         ):
-            board = keyboard(Settings.from_dict(config), "member", "奶娃图鉴", 2, 3)
+            board = keyboard(Settings.from_dict(config), "member", "奶蛙图鉴", 2, 3)
             rows = board["content"]["rows"]
             actions = [b["action"] for row in rows for b in row["buttons"]]
             self.assertEqual(
@@ -586,12 +586,12 @@ class ConfigAndButtonsTests(unittest.TestCase):
                 [
                     prefix + c
                     for c in (
-                        "今日奶娃",
-                        "奶娃图鉴",
-                        "奶娃排行",
+                        "今日奶蛙",
+                        "奶蛙图鉴",
+                        "奶蛙排行",
                         "我的展柜",
-                        "奶娃图鉴 1",
-                        "奶娃图鉴 3",
+                        "奶蛙图鉴 1",
+                        "奶蛙图鉴 3",
                     )
                 ],
             )

@@ -1,4 +1,4 @@
-"""奶娃排行榜：种类榜与数量榜并排。"""
+"""奶蛙排行榜：种类榜与数量榜并排。"""
 
 import io
 from pathlib import Path
@@ -29,7 +29,7 @@ def render_ranking(root: Path, boards: dict, avatars: dict[str, bytes]) -> Card:
     rows = max(1, *(len(boards[k][:10]) for k in ("species", "total")))
     canvas = Canvas(root, RANK_WIDTH, 300 + rows * ROW + 96)
     height = canvas.image.height
-    canvas.header("奶娃排行榜", "本群玩家 · 跨群累计（含下架收藏）")
+    canvas.header("奶蛙排行榜", "本群玩家 · 跨群累计（含下架收藏）")
     for column, (kind, label, unit) in enumerate(
         (("species", "收集种类榜", "种"), ("total", "累计数量榜", "件"))
     ):
@@ -61,5 +61,5 @@ def render_ranking(root: Path, boards: dict, avatars: dict[str, bytes]) -> Card:
                 canvas.text(name[:1], (x + 132, y + 40), 26, BASE, 800, "mm")
             canvas.text(name, (x + 176, y + 40), 25, CREAM, 700, "lm", width=316)
             canvas.text(f"{player[kind]} {unit}", (x + 656, y + 40), 30, color, 800, "rm", width=140)
-    canvas.text("每天领一只奶娃，把日子攒成一座展馆。", (PAD, height - 38), 20, OVERLAY2, anchor="lm")
+    canvas.text("每天领一只奶蛙，把日子攒成一座展馆。", (PAD, height - 38), 20, OVERLAY2, anchor="lm")
     return finish(canvas.image)

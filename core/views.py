@@ -46,8 +46,8 @@ def keyboard(
         }
 
     rows = [
-        {"buttons": [button("今日奶娃", "今日奶娃"), button("奶娃图鉴", "奶娃图鉴")]},
-        {"buttons": [button("奶娃排行", "奶娃排行"), button("我的展柜", "我的展柜")]},
+        {"buttons": [button("今日奶蛙", "今日奶蛙"), button("奶蛙图鉴", "奶蛙图鉴")]},
+        {"buttons": [button("奶蛙排行", "奶蛙排行"), button("我的展柜", "我的展柜")]},
     ]
     navigation = []
     if page > 1:
@@ -84,7 +84,7 @@ def today_message(
     streak = result.get("repeat_streak", 0)
     if settings.duplicate_pity and streak and progress["unlocked"] < progress["active_total"]:
         protection = (
-            "下次领取必出未收集奶娃！"
+            "下次领取必出未收集奶蛙！"
             if streak >= settings.duplicate_pity
             else f"重复保护 {streak}/{settings.duplicate_pity}"
         )
@@ -109,9 +109,9 @@ def today_message(
     group = item.get("group_name") or ""
     title = f"**{md(item['name'])}**" + (f" · {md(group)}" if group else "")
     text = (
-        f'<qqbot-at-user id="{user["open_id"]}" />\n\n### 今日奶娃 · {state}\n\n'
+        f'<qqbot-at-user id="{user["open_id"]}" />\n\n### 今日奶蛙 · {state}\n\n'
         f"{title}\n\n"
-        f"![奶娃 #{width}px #{height}px]({{{{image:0}}}})\n\n"
+        f"![奶蛙 #{width}px #{height}px]({{{{image:0}}}})\n\n"
         f"{description}\n\n"
         f"本件累计 **{result['count']}** 次 · 总收获 **{progress['total']}** 件\n\n"
         f"已解锁 **{progress['unlocked']}/{progress['active_total']}** · {result['day']}"
@@ -130,7 +130,7 @@ async def collection_message(
     settings: Settings, root: Path, user: dict, progress: dict, page: int, atlas: bool
 ) -> Message:
     """两种发送模式共用同一张内存中的卡片。"""
-    title = "奶娃图鉴" if atlas else "我的展柜"
+    title = "奶蛙图鉴" if atlas else "我的展柜"
     items = (
         [p for p in progress["entries"] if p["enabled"]]
         if atlas
@@ -147,7 +147,7 @@ def ranking_message(
     settings: Settings, root: Path, user: dict, boards: dict, avatars: dict
 ) -> Message:
     return card_message(
-        settings, user, render_ranking(root, boards, avatars), "奶娃排行榜", "ranking"
+        settings, user, render_ranking(root, boards, avatars), "奶蛙排行榜", "ranking"
     )
 
 
@@ -167,10 +167,10 @@ def material_message(usage: dict, active: bool, cache_minutes: int) -> Message:
     cache = f"{cache_minutes} 分钟" if cache_minutes else "即用即删"
     return Message(
         f"QQ 素材库占用：{usage['total']}/100\n"
-        f"本插件：{usage['ours']} 张，其中缓存中的奶娃图 {usage['cached']} 张（缓存时间：{cache}）\n"
+        f"本插件：{usage['ours']} 张，其中缓存中的奶蛙图 {usage['cached']} 张（缓存时间：{cache}）\n"
         f"超过 10 分钟的残留：{usage['stale']} 张，{cleanup}\n"
         f"其他插件或手动上传：{usage['others']} 张\n"
-        "可发送「奶娃素材库 删除缓存」或「奶娃素材库 删除全部」清理。"
+        "可发送「奶蛙素材库 删除缓存」或「奶蛙素材库 删除全部」清理。"
     )
 
 

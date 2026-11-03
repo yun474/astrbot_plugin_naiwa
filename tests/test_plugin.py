@@ -412,11 +412,11 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         event = NativeEvent("diagnose")
         await self.plugin.diagnose(event)
         event.send.assert_awaited_once_with(
-            ("plain", "奶娃诊断仅用于检查 QQ 官方机器人的图片转存链路。")
+            ("plain", "奶蛙诊断仅用于检查 QQ 官方机器人的图片转存链路。")
         )
         event = NativeEvent("private", group="")
         await self.plugin.draw(event)
-        event.send.assert_awaited_once_with(("plain", "今日奶娃请在群聊中使用。"))
+        event.send.assert_awaited_once_with(("plain", "今日奶蛙请在群聊中使用。"))
         self.plugin.transport.request.assert_not_awaited()
 
     async def test_native_send_timeout_releases_worker_and_allows_shutdown(self):

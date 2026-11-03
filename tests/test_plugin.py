@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from botpy.message import C2CMessage, GroupMessage
 from botpy.message import Message as ChannelMessage
+from fixtures import install, make_official
 
 
 class FakeConfig(dict):
@@ -248,6 +249,11 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         sys.path.insert(0, self.parent)
         sys.modules.pop("astrbot_plugin_naiwa.main", None)
         self.module = importlib.import_module("astrbot_plugin_naiwa.main")
+        # 用临时生成的 120 件官方名单代替真实资源，并预先装好图片，测试全程不联网。
+        self.resources = tempfile.TemporaryDirectory()
+        self.fixture = make_official(Path(self.resources.name), 120)
+        install(self.root, self.fixture)
+        self.module.RESOURCES = Path(self.resources.name)
         self.config = FakeConfig(
             {
                 "endpoint": "https://r2.example.com",
@@ -274,6 +280,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         sys.path.remove(self.parent)
         self.patcher.stop()
         self.temp.cleanup()
+        self.resources.cleanup()
 
     async def test_commands_share_global_account_and_duplicate_events_are_suppressed(self):
         events = [OfficialEvent(f"event-{i}", group=f"group-{i}") for i in range(4)]
@@ -554,26 +561,46 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(event.stopped)
         self.plugin.transport.request.assert_not_awaited()
 
-    async def test_reload_backup_admin_declarations_and_missing_manifest_preserves_catalog(self):
+    async def test_reload_backup_admin_declarations_and_custom_layer_survives_restart(self):
         await self.plugin.initialize()
         self.assertTrue(self.plugin.reload.admin_only)
         self.assertTrue(self.plugin.backup.admin_only)
         self.assertTrue(self.plugin.diagnose.admin_only)
-        manifest = self.root / "catalog" / "naiwa.json"
-        items = json.loads(manifest.read_text("utf-8"))
-        items[0]["enabled"] = False
-        manifest.write_text(json.dumps(items, ensure_ascii=False), "utf-8")
+        custom = self.root / "catalog" / "custom.json"
+        self.assertEqual(json.loads(custom.read_text("utf-8")), [])
+        custom.write_text(json.dumps([{"id": "item-0", "enabled": False}]), "utf-8")
         await self.plugin.reload(OfficialEvent("reload"))
-        progress = await self.plugin.db.collection(999)
-        self.assertEqual(progress["active_total"], 119)
+        self.assertEqual((await self.plugin.db.collection(999))["active_total"], 119)
         await self.plugin.backup(OfficialEvent("backup"))
         self.assertTrue(list((self.root / "backups").glob("*.zip")))
-        manifest.unlink()
         await self.plugin.terminate()
         self.plugin.ready = False
         await self.plugin.initialize()
-        self.assertFalse(manifest.exists())
+        # 重启不会改动管理员的自定义图库。
+        self.assertEqual(json.loads(custom.read_text("utf-8")), [{"id": "item-0", "enabled": False}])
         self.assertEqual((await self.plugin.db.collection(999))["active_total"], 119)
+
+    async def test_first_install_does_not_wait_for_network_and_holds_player_commands(self):
+        for path in (self.root / "assets").iterdir():
+            path.unlink()
+        stalled = asyncio.Event()
+        self.plugin.syncer.run = AsyncMock(side_effect=stalled.wait)
+        await asyncio.wait_for(self.plugin.initialize(), 1)
+        self.assertEqual(len(self.plugin.pending), 119)
+        event = NativeEvent("first-draw")
+        await self.plugin.draw(event)
+        event.send.assert_awaited_once_with(("plain", "奶蛙图库正在首次下载，请稍后再试。"))
+        user = await self.plugin.db.identify("aiocqhttp", "10001", "20001", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 0)
+        alias = NativeEvent("alias")
+        await self.plugin.alias(alias, "称呼")
+        alias.send.assert_awaited_once_with(("chain", [("text", "称呼已经保存啦。")]))
+        install(self.root, self.fixture)
+        await self.plugin._apply_catalog()
+        self.assertTrue(self.plugin.syncer.installed_once)
+        event = NativeEvent("second-draw")
+        await self.plugin.draw(event)
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
 
 
 if __name__ == "__main__":

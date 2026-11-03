@@ -53,6 +53,12 @@
     "default": 7,
     "hint": "启动及每 24 小时备份一次；管理员也可执行奶蛙备份。备份不上传图床。"
   },
+  "extra_asset_mirrors": {
+    "description": "额外的图包下载加速地址",
+    "type": "list",
+    "default": [],
+    "hint": "可选，默认留空即可。插件已内置多条国内可用线路；内置线路都失效时，可填写形如 https://example.com/ 的 GitHub 加速前缀，会优先尝试。"
+  },
   "command_prefix": {
     "description": "快捷指令唤醒词",
     "type": "string",

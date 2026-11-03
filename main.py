@@ -14,8 +14,9 @@ from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import (
 )
 from botpy.message import GroupMessage
 
+from .core.assets import AssetError, AssetSync
 from .core.avatars import Avatars
-from .core.catalog import initialize_catalog, read_catalog
+from .core.catalog import build_catalog, load_official, prepare
 from .core.config import NaiwaError, Settings, migrate_host_config
 from .core.database import Database
 from .core.delivery import Message, QQError, QQTransport, Sender, message_key
@@ -33,9 +34,12 @@ from .core.views import (
 
 MAX_INFLIGHT = 12
 REQUEST_TIMEOUT = 240
+RESOURCES = Path(__file__).parent / "resources"
+# 首次安装的官方图包尚未就绪时，这些指令只会抽到或展示兜底图，先提示稍后再试。
+PLAYER_COMMANDS = {"draw", "atlas", "pen"}
 
 
-@register("astrbot_plugin_naiwa", "yun474", "每天抽一只奶蛙的收藏插件", "1.0.0")
+@register("astrbot_plugin_naiwa", "yun474", "每天抽一只奶蛙的收藏插件", "1.1.0")
 class NaiwaPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -56,6 +60,11 @@ class NaiwaPlugin(Star):
             material=self.material,
         )
         self.avatars = Avatars()
+        self.official = load_official(RESOURCES)
+        self.syncer = AssetSync(self.root, self.official, self.settings.extra_asset_mirrors)
+        self.pending = []
+        self.sync_wake = asyncio.Event()
+        self.sync_task = None
         self.ready = False
         self.init_lock = asyncio.Lock()
         self.maintenance_lock = asyncio.Lock()
@@ -72,13 +81,16 @@ class NaiwaPlugin(Star):
             if self.ready:
                 return
             await self.db.initialize()
-            if not await self.db.has_catalog():
-                await asyncio.to_thread(
-                    initialize_catalog, self.root, Path(__file__).parent / "resources"
-                )
             try:
-                items = await asyncio.to_thread(read_catalog, self.root)
-                await self.db.catalog(items)
+                summary = await asyncio.to_thread(
+                    prepare, self.root, RESOURCES, self.official.items
+                )
+                if summary:
+                    logger.info("[naiwa] %s", summary)
+            except NaiwaError as exc:
+                logger.error("[naiwa] Legacy catalog migration skipped: %s", exc)
+            try:
+                await self._apply_catalog()
             except NaiwaError as exc:
                 if not await self.db.has_catalog():
                     raise
@@ -86,6 +98,43 @@ class NaiwaPlugin(Star):
             self.ready = True
             self.backup_task = asyncio.create_task(self._backups())
             self.cleanup_task = asyncio.create_task(self._cleanup())
+            # 图包下载放在后台，插件加载不等待网络。
+            self.sync_task = asyncio.create_task(self._sync())
+
+    async def _apply_catalog(self):
+        current = await self.db.assets()
+        catalog = await asyncio.to_thread(build_catalog, self.root, self.official.items, current)
+        await self.db.catalog(catalog.items)
+        self.pending = catalog.pending
+        if not catalog.pending and not self.syncer.installed_once:
+            await asyncio.to_thread(self.syncer.mark_installed)
+        for warning in catalog.warnings:
+            logger.warning("[naiwa] %s", warning)
+        return catalog
+
+    async def _sync(self):
+        while True:
+            self.sync_wake.clear()
+            delay = None
+            try:
+                count, source = await self.syncer.run()
+                if count:
+                    logger.info("[naiwa] Installed %s official images from %s.", count, source)
+                    async with self.maintenance_lock:
+                        await self._apply_catalog()
+            except AssetError as exc:
+                delay = self.syncer.retry_delay()
+                logger.warning("[naiwa] Official images unavailable, retry in %ss: %s", delay, exc)
+            except NaiwaError as exc:
+                logger.error("[naiwa] Catalog update after download rejected: %s", exc)
+            except Exception as exc:
+                delay = self.syncer.retry_delay()
+                logger.error(
+                    "[naiwa] Official image sync failed: %s", exception_detail(exc, self.settings)
+                )
+            # 成功后一直等待，直到管理员重载时发现仍有缺图再唤醒。
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.sync_wake.wait(), delay)
 
     async def _backups(self):
         while True:
@@ -171,6 +220,8 @@ class NaiwaPlugin(Star):
             if time.monotonic() >= deadline:
                 raise NaiwaError("本次请求排队超时，请重新发送指令。")
             await self.initialize()
+            if command in PLAYER_COMMANDS and self.pending and not self.syncer.installed_once:
+                raise NaiwaError(self.syncer.notice())
             key = message_key(event, app_id)
             receipt = await self.db.delivery(key)
             if receipt["done"]:
@@ -242,11 +293,15 @@ class NaiwaPlugin(Star):
                 message = Message("称呼已经保存啦。")
             elif command == "reload":
                 async with self.maintenance_lock:
-                    items = await asyncio.to_thread(read_catalog, self.root)
-                    await self.db.catalog(items)
-                message = Message(
-                    f"图库重载完成，当前启用 {sum(p['enabled'] for p in items)} 种奶蛙。"
-                )
+                    catalog = await self._apply_catalog()
+                if self.pending:
+                    self.sync_wake.set()
+                lines = [
+                    f"图库重载完成，当前启用 {sum(p['enabled'] for p in catalog.items)} 种奶蛙。",
+                    self.syncer.status(len(self.pending)),
+                    *catalog.warnings[:3],
+                ]
+                message = Message("\n".join(lines))
             elif command == "backup":
                 async with self.maintenance_lock:
                     await self.db.backup(self.settings.backup_keep)
@@ -411,7 +466,7 @@ class NaiwaPlugin(Star):
         await asyncio.gather(*tasks, return_exceptions=True)
         async with self.init_lock:
             pass
-        for task in (self.backup_task, self.cleanup_task):
+        for task in (self.backup_task, self.cleanup_task, self.sync_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

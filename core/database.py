@@ -109,6 +109,12 @@ class Database:
 
         await self.run(update)
 
+    async def assets(self) -> dict[str, str]:
+        """各条目当前使用的素材，官方新图下载完成前继续沿用。"""
+        return await self.run(
+            lambda c: {row["id"]: row["asset"] for row in c.execute("SELECT id,asset FROM items")}
+        )
+
     async def has_catalog(self) -> bool:
         return await self.run(
             lambda c: bool(c.execute("SELECT 1 FROM items WHERE enabled=1").fetchone())
@@ -372,9 +378,8 @@ class Database:
                             dict(p)
                             for p in dst.execute("SELECT * FROM items ORDER BY sort_order,id")
                         ]
-                    # 从同一个数据库快照导出已生效的图库。
-                    # 备份期间管理员可能正在编辑工作区 JSON。
-                    # 导出为与工作区相同的清单格式，恢复后可直接重载。
+                    # 从同一个数据库快照导出已生效的图库，仅供查看。
+                    # 恢复时以自定义图库和 assets/ 为准：官方图按指纹即可找回，无需重新下载。
                     manifest = [
                         {
                             "id": p["id"],
@@ -389,13 +394,23 @@ class Database:
                         }
                         for p in items
                     ]
+                    catalog = self.root / "catalog"
                     with zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED) as archive:
                         archive.write(db_copy, "naiwa.sqlite3")
                         archive.writestr(
-                            "catalog/naiwa.json", json.dumps(manifest, ensure_ascii=False, indent=2)
+                            "catalog/effective.json",
+                            json.dumps(manifest, ensure_ascii=False, indent=2),
                         )
-                        for name in sorted({p["asset"] for p in items}):
-                            archive.write(self.root / "assets" / name, f"catalog/images/{name}")
+                        # 自定义图库可能引用 catalog/ 下任意位置的图片；迁移留下的旧版备份不再重复打包。
+                        for path in sorted(catalog.rglob("*")) if catalog.is_dir() else ():
+                            relative = path.relative_to(catalog)
+                            if (
+                                path.is_file()
+                                and not path.is_symlink()
+                                and not relative.parts[0].startswith("legacy-")
+                                and not path.name.endswith(".tmp")
+                            ):
+                                archive.write(path, f"catalog/{relative.as_posix()}")
                         for path in sorted((self.root / "assets").iterdir()):
                             if (
                                 path.is_file()

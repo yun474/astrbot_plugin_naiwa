@@ -1,6 +1,6 @@
 # 素材来源
 
-内置素材均来自以下仓库，经缩放后收录：
+官方图包中的素材均来自以下仓库，经缩放后收录：
 
 - [Nailong-Studio/NaiLoong-Universe](https://github.com/Nailong-Studio/NaiLoong-Universe)（奶蛙艺术圣殿）：MIT。奶蛙为民间二创形象，角色原型权利归原权利人。
 - [GeorgeNaNN/nailong-memes](https://github.com/GeorgeNaNN/nailong-memes)：「来只奶龙」插件的默认图库，仓库标注 MIT，内容为网络收集的表情包。

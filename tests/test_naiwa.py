@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from core.catalog import read_catalog
+from core.catalog import build_catalog
 from core.config import NaiwaError, Settings
 from core.rendering import render_today
 from core.views import image_size, today_message
@@ -35,11 +35,11 @@ class NaiwaCatalogTests(unittest.TestCase):
             "image": "images/wide.jpg",
         }
         item.update(overrides)
-        (self.root / "catalog" / "naiwa.json").write_text(json.dumps([item]), "utf-8")
+        (self.root / "catalog" / "custom.json").write_text(json.dumps([item]), "utf-8")
 
     def test_empty_description_is_allowed_and_image_size_comes_from_file(self):
         self.write()
-        (item,) = read_catalog(self.root)
+        (item,) = build_catalog(self.root, ()).items
         self.assertEqual(item["description"], "")
         self.assertEqual(item["group_name"], "伍·咏颂")
         self.assertEqual((item["width"], item["height"]), (160, 90))
@@ -49,7 +49,7 @@ class NaiwaCatalogTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.write(group=value)
                 with self.assertRaises(NaiwaError):
-                    read_catalog(self.root)
+                    build_catalog(self.root, ())
 
 
 class NaiwaMessageTests(unittest.TestCase):

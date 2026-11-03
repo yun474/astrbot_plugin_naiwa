@@ -1,0 +1,4 @@
+docs/ export-ignore
+tests/ export-ignore
+pyproject.toml export-ignore
+tools/ export-ignore

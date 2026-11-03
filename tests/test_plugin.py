@@ -1,0 +1,580 @@
+import asyncio
+import importlib
+import json
+import logging
+import sys
+import tempfile
+import types
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from botpy.message import C2CMessage, GroupMessage
+from botpy.message import Message as ChannelMessage
+
+
+class FakeConfig(dict):
+    def save_config(self):
+        pass
+
+
+class OfficialEvent:
+    def __init__(self, message_id="event", user="member", group="group-a"):
+        self.group, self.user = group, user
+        self.message_obj = SimpleNamespace(
+            message_id=message_id,
+            raw_message=GroupMessage(
+                None,
+                message_id,
+                {"id": message_id, "group_openid": group, "author": {"member_openid": user}},
+            ),
+        )
+        self.message_obj.raw_message.author.username = "玩家名字"
+        self.bot = SimpleNamespace(
+            api=SimpleNamespace(_http=SimpleNamespace(_token=SimpleNamespace(app_id="app")))
+        )
+        self.send = AsyncMock()
+        self.stopped = False
+
+    def get_group_id(self):
+        return self.group
+
+    def get_sender_id(self):
+        return self.user
+
+    def stop_event(self):
+        self.stopped = True
+
+    def plain_result(self, text):
+        return text
+
+    def chain_result(self, chain):
+        return chain
+
+    def get_sender_name(self):
+        return self.message_obj.raw_message.author.username
+
+
+class NativeEvent:
+    """非官机的 AstrBot 事件，例如 aiocqhttp。"""
+
+    def __init__(self, message_id="native", user="10001", group="20001"):
+        self.group, self.user = group, user
+        self.message_obj = SimpleNamespace(message_id=message_id, raw_message={})
+        self.send = AsyncMock()
+
+    def get_group_id(self):
+        return self.group
+
+    def get_sender_id(self):
+        return self.user
+
+    def get_sender_name(self):
+        return "群友"
+
+    def get_platform_id(self):
+        return "aiocqhttp"
+
+    def get_platform_name(self):
+        return "aiocqhttp"
+
+    def stop_event(self):
+        pass
+
+    def plain_result(self, text):
+        return ("plain", text)
+
+    def chain_result(self, chain):
+        return ("chain", chain)
+
+
+class PluginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_channel_and_private_scenes_do_not_write_or_upload(self):
+        self.plugin.db.identify = AsyncMock()
+        for raw_type in (ChannelMessage, C2CMessage):
+            event = OfficialEvent("unsupported", group="channel-id")
+            event.message_obj.raw_message = raw_type(None, "event", {})
+            await self.plugin.draw(event)
+            event.send.assert_awaited_once()
+        self.plugin.db.identify.assert_not_awaited()
+        self.plugin.publisher.host.upload.assert_not_awaited()
+        self.plugin.transport.request.assert_not_awaited()
+        self.assertFalse(self.plugin.db.path.exists())
+
+    async def test_queue_is_bounded_and_one_user_cannot_fill_it(self):
+        release = asyncio.Event()
+        self.plugin._execute = AsyncMock()
+        for _ in range(3):
+            await self.plugin.limit.acquire()
+
+        # 使用异步副作用，让唯一一条过载提示保持发送中。
+        async def busy(*args):
+            await release.wait()
+
+        self.plugin._failure = AsyncMock(side_effect=busy)
+        events = [OfficialEvent(f"event-{i}", user=f"user-{i}") for i in range(100)]
+        calls = [asyncio.create_task(self.plugin.draw(event)) for event in events]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        self.assertEqual(len(self.plugin.inflight), self.module.MAX_INFLIGHT)
+        self.assertEqual(self.plugin._failure.await_count, 1)
+        await self.plugin.draw(OfficialEvent("same-user-again", user="user-0"))
+        self.assertEqual(len(self.plugin.inflight), self.module.MAX_INFLIGHT)
+        release.set()
+        for _ in range(3):
+            self.plugin.limit.release()
+        await asyncio.gather(*calls)
+        self.assertEqual(self.plugin._execute.await_count, self.module.MAX_INFLIGHT)
+        self.assertFalse(self.plugin.inflight)
+        self.assertFalse(self.plugin.active_users)
+
+    async def test_queued_request_expires_without_waiting_for_a_worker(self):
+        self.plugin._execute = AsyncMock()
+        self.plugin._failure = AsyncMock()
+        for _ in range(3):
+            await self.plugin.limit.acquire()
+        with patch.object(self.module, "REQUEST_TIMEOUT", 0.02):
+            await asyncio.wait_for(self.plugin.draw(OfficialEvent()), 1)
+        self.plugin._execute.assert_not_awaited()
+        self.plugin._failure.assert_awaited_once()
+        self.assertFalse(self.plugin.inflight)
+        for _ in range(3):
+            self.plugin.limit.release()
+
+    async def test_shutdown_drains_running_work_and_skips_queued_work(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def execute(*args):
+            if self.plugin._execute.await_count == 3:
+                entered.set()
+            await release.wait()
+
+        self.plugin._execute = AsyncMock(side_effect=execute)
+        self.plugin.transport.close = AsyncMock()
+        calls = [
+            asyncio.create_task(self.plugin.draw(OfficialEvent(str(i), user=str(i))))
+            for i in range(6)
+        ]
+        await asyncio.wait_for(entered.wait(), 1)
+        shutdown = asyncio.create_task(self.plugin.terminate())
+        await asyncio.sleep(0)
+        await self.plugin.draw(OfficialEvent("after-stop", user="new-user"))
+        self.plugin.transport.close.assert_not_awaited()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*calls, shutdown), 1)
+        self.assertEqual(self.plugin._execute.await_count, 3)
+        self.plugin.transport.close.assert_awaited_once()
+        self.assertFalse(self.plugin.inflight)
+
+    async def test_cancelled_handler_keeps_work_registered_until_completion(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def execute(*args):
+            entered.set()
+            await release.wait()
+
+        self.plugin._execute = AsyncMock(side_effect=execute)
+        call = asyncio.create_task(self.plugin.draw(OfficialEvent()))
+        await asyncio.wait_for(entered.wait(), 1)
+        call.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await call
+        self.assertEqual(len(self.plugin.inflight), 1)
+        release.set()
+        await self.plugin.terminate()
+        self.assertFalse(self.plugin.inflight)
+        self.assertFalse(self.plugin.active_users)
+
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        modules = {}
+        names = [
+            "astrbot",
+            "astrbot.api",
+            "astrbot.api.event",
+            "astrbot.api.star",
+            "astrbot.api.message_components",
+            "astrbot.core",
+            "astrbot.core.platform",
+            "astrbot.core.platform.sources",
+            "astrbot.core.platform.sources.qqofficial",
+            "astrbot.core.platform.sources.qqofficial.qqofficial_message_event",
+        ]
+        for name in names:
+            modules[name] = types.ModuleType(name)
+
+        def command(name, **kwargs):
+            def decorate(function):
+                function.command_name = name
+                return function
+
+            return decorate
+
+        def permission(value):
+            def decorate(function):
+                function.admin_only = True
+                return function
+
+            return decorate
+
+        class Star:
+            def __init__(self, context):
+                self.context = context
+
+        modules["astrbot.api"].AstrBotConfig = dict
+        modules["astrbot.api"].logger = logging.getLogger("naiwa-tests")
+        modules["astrbot.api.event"].AstrMessageEvent = OfficialEvent
+        modules["astrbot.api.event"].filter = SimpleNamespace(
+            command=command, permission_type=permission, PermissionType=SimpleNamespace(ADMIN=1)
+        )
+        modules["astrbot.api.message_components"].Plain = lambda text: ("text", text)
+        modules["astrbot.api.message_components"].Image = SimpleNamespace(
+            fromBytes=lambda data: ("image", data)
+        )
+        modules["astrbot.api.star"].Context = object
+        modules["astrbot.api.star"].Star = Star
+        modules["astrbot.api.star"].StarTools = SimpleNamespace(get_data_dir=lambda name: self.root)
+        modules["astrbot.api.star"].register = lambda *args: lambda cls: cls
+        modules[names[-1]].QQOfficialMessageEvent = OfficialEvent
+        package = types.ModuleType("astrbot_plugin_naiwa")
+        package.__path__ = [str(Path(__file__).resolve().parents[1])]
+        modules["astrbot_plugin_naiwa"] = package
+        self.patcher = patch.dict(sys.modules, modules)
+        self.patcher.start()
+        self.parent = str(Path(__file__).resolve().parents[2])
+        sys.path.insert(0, self.parent)
+        sys.modules.pop("astrbot_plugin_naiwa.main", None)
+        self.module = importlib.import_module("astrbot_plugin_naiwa.main")
+        self.config = FakeConfig(
+            {
+                "endpoint": "https://r2.example.com",
+                "bucket": "items",
+                "access_key": "key",
+                "secret_key": "secret",
+                "public_base_url": "https://img.example.com",
+                "image_retry_count": 0,
+            }
+        )
+        self.config.save_config = Mock()
+        self.plugin = self.module.NaiwaPlugin(object(), self.config)
+        self.config.save_config.assert_called_once_with()
+        self.plugin.transport.upload_image = AsyncMock(return_value="qq-image-info")
+        self.plugin.avatars.get_many = AsyncMock(return_value={})
+        self.plugin.transport.request = AsyncMock(return_value={"id": "sent"})
+        self.plugin.publisher.host.upload = AsyncMock(
+            return_value="https://img.example.com/item.png"
+        )
+
+    async def asyncTearDown(self):
+        await self.plugin.terminate()
+        sys.modules.pop("astrbot_plugin_naiwa.main", None)
+        sys.path.remove(self.parent)
+        self.patcher.stop()
+        self.temp.cleanup()
+
+    async def test_commands_share_global_account_and_duplicate_events_are_suppressed(self):
+        events = [OfficialEvent(f"event-{i}", group=f"group-{i}") for i in range(4)]
+        await asyncio.gather(*(self.plugin.draw(e) for e in events))
+        self.assertTrue(all(e.stopped for e in events))
+        user = await self.plugin.db.identify("app", "member", "group-a", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+        count = self.plugin.transport.request.await_count
+        await self.plugin.draw(events[0])
+        self.assertEqual(self.plugin.transport.request.await_count, count)
+        await self.plugin.atlas(OfficialEvent("atlas"), 1)
+        await self.plugin.pen(OfficialEvent("pen"))
+        await self.plugin.ranking(OfficialEvent("rank"), "数量")
+        await self.plugin.alias(OfficialEvent("alias"), "自定义称呼")
+        updated = await self.plugin.db.identify("app", "member", "group-a", "")
+        self.assertEqual(updated["alias"], "自定义称呼")
+        for call in self.plugin.transport.request.await_args_list:
+            payload = call.args[1]
+            if payload["msg_type"] == 2:
+                self.assertTrue(payload["markdown"]["force_verify_image_resource"])
+            else:
+                self.assertIn(payload["msg_type"], (0, 7))
+                self.assertNotIn("keyboard", payload)
+                self.assertNotIn("markdown", payload)
+
+    async def test_upload_failure_keeps_draw_and_next_command_displays_same_item(self):
+        from astrbot_plugin_naiwa.core.storage import UploadError
+
+        self.plugin.publisher.host.upload.side_effect = UploadError("temporary")
+        await self.plugin.draw(OfficialEvent("failed"))
+        user = await self.plugin.db.identify("app", "member", "a", "")
+        before = await self.plugin.db.collection(user["id"])
+        self.assertEqual(before["total"], 1)
+        self.plugin.publisher.host.upload.side_effect = None
+        await self.plugin.draw(OfficialEvent("retry"))
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+
+    async def test_reported_qq_rejection_retries_and_logs_through_astrbot(self):
+        from astrbot_plugin_naiwa.core.delivery import QQError
+
+        config = replace(self.plugin.settings, image_retry_count=10)
+        self.plugin.settings = self.plugin.sender.settings = config
+        self.plugin.transport.request.side_effect = [
+            QQError(40034141, 400, reason="upstream rejection", trace_id="trace-123")
+        ] * 10 + [{"id": "sent"}]
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with self.assertLogs("naiwa-tests", level="WARNING") as logs:
+                await self.plugin.draw(OfficialEvent("retry-40034141"))
+        self.assertEqual(self.plugin.transport.request.await_count, 11)
+        self.assertEqual(self.plugin.publisher.host.upload.await_count, 1)
+        self.assertIn("stage=send attempt=1/11 code=40034141 http=400", logs.output[0])
+        self.assertIn("reason=upstream rejection trace_id=trace-123", logs.output[0])
+        user = await self.plugin.db.identify("app", "member", "a", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+
+    async def test_no_host_configuration_does_not_consume_draw(self):
+        from astrbot_plugin_naiwa.core.config import Settings
+
+        self.plugin.settings = Settings()
+        await self.plugin.draw(OfficialEvent())
+        user = await self.plugin.db.identify("app", "member", "a", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 0)
+
+    async def test_every_command_works_without_host_and_switching_keeps_daily_record(self):
+        from astrbot_plugin_naiwa.core.config import Settings
+
+        config = Settings(display={"draw": False})
+        self.plugin.settings = self.plugin.sender.settings = config
+        self.plugin.publisher.publish = AsyncMock(side_effect=AssertionError("No host expected"))
+        for command in (self.plugin.draw, self.plugin.atlas, self.plugin.pen, self.plugin.ranking):
+            await command(OfficialEvent(command.__name__))
+            payload = self.plugin.transport.request.await_args.args[1]
+            self.assertEqual(payload["msg_type"], 7)
+            self.assertNotIn("keyboard", payload)
+            self.assertNotIn("markdown", payload)
+        self.plugin.publisher.publish.assert_not_awaited()
+        self.assertFalse((self.root / "cards").exists())
+        self.assertFalse((self.root / "thumbnails").exists())
+        user = await self.plugin.db.identify("app", "member", "group-a", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+        config = Settings.from_dict(
+            {**self.config, "display": dict.fromkeys(("draw", "atlas", "pen", "ranking"), True)}
+        )
+        self.plugin.settings = self.plugin.sender.settings = config
+        self.plugin.publisher.publish = AsyncMock(return_value="https://images.example.com/p.png")
+        for command in (self.plugin.draw, self.plugin.atlas, self.plugin.pen, self.plugin.ranking):
+            await command(OfficialEvent("hosted-" + command.__name__))
+            payload = self.plugin.transport.request.await_args.args[1]
+            self.assertEqual(payload["msg_type"], 2)
+            self.assertIn("keyboard", payload)
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+
+    async def test_local_upload_failure_preserves_collection(self):
+        from astrbot_plugin_naiwa.core.config import Settings
+        from astrbot_plugin_naiwa.core.delivery import QQError
+
+        self.plugin.settings = self.plugin.sender.settings = Settings(display={"draw": False})
+        self.plugin.transport.upload_image.side_effect = QQError(123, 401)
+        await self.plugin.draw(OfficialEvent("failed-local"))
+        self.assertIn(
+            "QQ 本地图片上传失败", self.plugin.transport.request.await_args.args[1]["content"]
+        )
+        self.plugin.transport.upload_image.side_effect = None
+        await self.plugin.draw(OfficialEvent("retry-local"))
+        user = await self.plugin.db.identify("app", "member", "group-a", "")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+
+    async def test_non_official_group_sends_local_cards_through_astrbot(self):
+        self.plugin.publisher.publish = AsyncMock(side_effect=AssertionError("No host expected"))
+        for command, args in (
+            (self.plugin.draw, ()),
+            (self.plugin.atlas, (1,)),
+            (self.plugin.pen, ()),
+            (self.plugin.ranking, ("数量",)),
+        ):
+            event = NativeEvent(command.__name__)
+            await command(event, *args)
+            kind, chain = event.send.await_args.args[0]
+            self.assertEqual(kind, "chain")
+            self.assertEqual([part[0] for part in chain], ["image"])
+            self.assertIsInstance(chain[0][1], bytes)
+        event = NativeEvent("draw")
+        await self.plugin.draw(event)
+        event.send.assert_not_awaited()
+        self.plugin.transport.request.assert_not_awaited()
+        self.plugin.transport.upload_image.assert_not_awaited()
+        self.assertTrue(self.plugin.avatars.get_many.await_args.kwargs["qq_number"])
+        user = await self.plugin.db.identify("aiocqhttp", "10001", "20001", "")
+        self.assertEqual(user["nickname"], "群友")
+        self.assertEqual((await self.plugin.db.collection(user["id"]))["total"], 1)
+
+    async def test_non_official_text_and_failures_use_astrbot_send(self):
+        event = NativeEvent("alias")
+        await self.plugin.alias(event, "自定义称呼")
+        event.send.assert_awaited_once_with(("chain", [("text", "称呼已经保存啦。")]))
+        event = NativeEvent("diagnose")
+        await self.plugin.diagnose(event)
+        event.send.assert_awaited_once_with(
+            ("plain", "奶娃诊断仅用于检查 QQ 官方机器人的图片转存链路。")
+        )
+        event = NativeEvent("private", group="")
+        await self.plugin.draw(event)
+        event.send.assert_awaited_once_with(("plain", "今日奶娃请在群聊中使用。"))
+        self.plugin.transport.request.assert_not_awaited()
+
+    async def test_native_send_timeout_releases_worker_and_allows_shutdown(self):
+        self.plugin.settings = replace(self.plugin.settings, request_timeout=0.05)
+        self.plugin.db.backup = AsyncMock()
+        await self.plugin.initialize()
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def stalled_send(*args):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        event = NativeEvent("stalled")
+        event.send.side_effect = stalled_send
+        request = asyncio.create_task(self.plugin.alias(event, "saved"))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            shutdown = asyncio.create_task(self.plugin.terminate())
+            await asyncio.wait_for(asyncio.gather(request, shutdown), 2)
+        finally:
+            for task in list(self.plugin.inflight.values()):
+                task.cancel()
+            await asyncio.gather(*self.plugin.inflight.values(), return_exceptions=True)
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(self.plugin.inflight)
+        self.assertFalse(self.plugin.active_users)
+        event.send.assert_awaited_once()  # 结果未知时不能再次发送。
+        receipt = await self.plugin.db.delivery(self.module.message_key(event, "aiocqhttp"))
+        self.assertFalse(receipt["done"])
+        user = await self.plugin.db.identify("aiocqhttp", "10001", "20001", "")
+        self.assertEqual(user["alias"], "saved")
+
+    async def test_native_notices_have_a_send_timeout(self):
+        self.plugin.settings = replace(self.plugin.settings, request_timeout=0.02)
+
+        async def stalled_send(*args):
+            await asyncio.Event().wait()
+
+        for group in ("", "20001"):
+            with self.subTest(group=group):
+                event = NativeEvent(group=group)
+                event.send.side_effect = stalled_send
+                action = (
+                    self.plugin.draw(event) if not group else self.plugin._failure(event, "error")
+                )
+                await asyncio.wait_for(action, 1)
+                event.send.assert_awaited_once()
+
+    async def test_expired_native_request_does_not_start_sending(self):
+        await self.plugin.initialize()
+        event = NativeEvent("expired")
+        original = self.plugin.db.set_alias
+        clock = Mock(return_value=0)
+
+        async def slow_alias(*args):
+            await original(*args)
+            clock.return_value = self.module.REQUEST_TIMEOUT + 1
+
+        self.plugin.db.set_alias = slow_alias
+        with patch.object(self.module, "time", SimpleNamespace(monotonic=clock)):
+            await self.plugin.alias(event, "saved")
+        event.send.assert_not_awaited()
+        receipt = await self.plugin.db.delivery(self.module.message_key(event, "aiocqhttp"))
+        self.assertFalse(receipt["done"])
+
+    async def test_cleanup_runs_independently_after_backup_failure(self):
+        self.plugin.db.backup = AsyncMock(side_effect=OSError("backup disk unavailable"))
+        self.plugin.db.prune_cache = AsyncMock()
+        with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
+            with self.assertLogs("naiwa-tests", level="ERROR"):
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.plugin._backups()
+            with patch.object(self.module, "clean_cards") as clean:
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.plugin._cleanup()
+                clean.assert_called_once_with(self.root)
+        self.plugin.db.prune_cache.assert_awaited_once()
+
+    async def test_diagnose_bypasses_url_cache_and_logs_upload_details(self):
+        from astrbot_plugin_naiwa.core.storage import UploadError
+
+        await self.plugin.diagnose(OfficialEvent("diagnose-1"))
+        self.assertEqual(self.plugin.publisher.host.upload.await_count, 1)
+        self.plugin.publisher.host.upload.side_effect = UploadError(
+            "TLS/SSL 证书校验失败",
+            diagnostic="provider=s3 stage=put_object exception=SSLError reason=CERTIFICATE_VERIFY_FAILED",
+        )
+        with self.assertLogs("naiwa-tests", level="WARNING") as logs:
+            await self.plugin.diagnose(OfficialEvent("diagnose-2"))
+        self.assertEqual(self.plugin.publisher.host.upload.await_count, 2)
+        self.assertIn("command=diagnose attempt=1/3", logs.output[0])
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", logs.output[0])
+        payload = self.plugin.transport.request.await_args.args[1]
+        self.assertEqual(payload["msg_type"], 0)
+        self.assertEqual(payload["content"], "TLS/SSL 证书校验失败")
+
+    async def test_material_usage_command_reports_and_respects_switch(self):
+        from dataclasses import replace
+
+        self.assertTrue(self.plugin.material_usage.admin_only)
+        self.plugin.transport.material = AsyncMock(
+            return_value={
+                "images": [{"image_id": "a", "file_name": "naiwa-a.png", "created_at": 0}],
+                "next_cursor": "",
+                "total": 3,
+            }
+        )
+        await self.plugin.material_usage(OfficialEvent("material-1"))
+        payload = self.plugin.transport.request.await_args.args[1]
+        self.assertEqual(payload["msg_type"], 0)
+        self.assertIn("QQ 素材库占用：3/100", payload["content"])
+        self.assertIn("本插件：1 张", payload["content"])
+        self.assertIn("其他插件或手动上传：2 张", payload["content"])
+
+        await self.plugin.material_usage(OfficialEvent("material-purge"), "删除缓存")
+        self.assertIn(
+            "已清理本插件的素材：删除 1 张",
+            self.plugin.transport.request.await_args.args[1]["content"],
+        )
+        deletes = [
+            c for c in self.plugin.transport.material.await_args_list if c.args[1] == "DELETE"
+        ]
+        self.assertEqual(deletes[-1].args[2], "/v2/media-images/a/delete")
+        await self.plugin.material_usage(OfficialEvent("material-bad"), "随便")
+        self.assertIn("用法", self.plugin.transport.request.await_args.args[1]["content"])
+
+        self.plugin.settings = replace(self.plugin.settings, material_usage_command=False)
+        self.plugin.transport.request.reset_mock()
+        event = OfficialEvent("material-2")
+        await self.plugin.material_usage(event)
+        # 开关关闭时不回复，也不拦截事件。
+        self.assertFalse(event.stopped)
+        self.plugin.transport.request.assert_not_awaited()
+
+    async def test_reload_backup_admin_declarations_and_missing_manifest_preserves_catalog(self):
+        await self.plugin.initialize()
+        self.assertTrue(self.plugin.reload.admin_only)
+        self.assertTrue(self.plugin.backup.admin_only)
+        self.assertTrue(self.plugin.diagnose.admin_only)
+        manifest = self.root / "catalog" / "naiwa.json"
+        items = json.loads(manifest.read_text("utf-8"))
+        items[0]["enabled"] = False
+        manifest.write_text(json.dumps(items, ensure_ascii=False), "utf-8")
+        await self.plugin.reload(OfficialEvent("reload"))
+        progress = await self.plugin.db.collection(999)
+        self.assertEqual(progress["active_total"], 119)
+        await self.plugin.backup(OfficialEvent("backup"))
+        self.assertTrue(list((self.root / "backups").glob("*.zip")))
+        manifest.unlink()
+        await self.plugin.terminate()
+        self.plugin.ready = False
+        await self.plugin.initialize()
+        self.assertFalse(manifest.exists())
+        self.assertEqual((await self.plugin.db.collection(999))["active_total"], 119)
+
+
+if __name__ == "__main__":
+    unittest.main()

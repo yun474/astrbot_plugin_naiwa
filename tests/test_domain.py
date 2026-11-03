@@ -1,0 +1,606 @@
+import asyncio
+import io
+import json
+import sqlite3
+import tempfile
+import unittest
+import zipfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image, ImageDraw
+
+from core.catalog import initialize_catalog, read_catalog
+from core.config import NaiwaError, Settings
+from core.database import Database
+from core.diagnostics import safe_detail
+from core.rendering.base import SURFACE0
+from core.views import collection_message, keyboard, md, ranking_message, today_message
+
+# 图鉴 8 列、格宽 108、间距 12，整体水平居中。
+ATLAS_LEFT = (1080 - (8 * 108 + 7 * 12)) // 2
+
+
+class DomainTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.db = Database(self.root)
+        await self.db.initialize()
+        (self.root / "catalog" / "images").mkdir(parents=True)
+        self.manifest = self.root / "catalog" / "naiwa.json"
+        self.write_catalog(["item", "cat"])
+        await self.db.catalog(read_catalog(self.root))
+        self.user = await self.db.identify("app", "member", "group-a", "昵称")
+
+    async def asyncTearDown(self):
+        self.temp.cleanup()
+
+    async def test_duplicate_cap_and_natural_probability_boundaries(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        first = await self.db.draw(self.user["id"], "a", "first", start)
+        for offset, cap, roll, repeated in (
+            (1, 20, 39, True),
+            (2, 20, 40, False),
+            (3, 100, 99, True),
+            (4, 100, 100, False),
+            (5, 0, 0, False),
+        ):
+            # 每次边界检查时，两种奶娃只保留其中一种已收藏。
+            await self.db.run(
+                lambda c: c.execute(
+                    "DELETE FROM collections WHERE user_id=? AND item_id<>?",
+                    (self.user["id"], first["item"]["id"]),
+                )
+            )
+            with patch("core.database.secrets.randbelow", return_value=roll):
+                result = await self.db.draw(
+                    self.user["id"],
+                    "a",
+                    str(offset),
+                    start + timedelta(days=offset),
+                    duplicate_rate_cap=cap,
+                    duplicate_pity=0,
+                )
+            self.assertEqual(result["item"]["id"] == first["item"]["id"], repeated)
+
+    async def test_pity_survives_gaps_restart_and_same_day_replays(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        first = await self.db.draw(self.user["id"], "a", "first", start)
+        with patch("core.database.secrets.randbelow", return_value=0):
+            for offset in (1, 8):
+                result = await self.db.draw(
+                    self.user["id"],
+                    "b",
+                    str(offset),
+                    start + timedelta(days=offset),
+                )
+                self.assertEqual(result["item"]["id"], first["item"]["id"])
+            self.assertEqual(result["repeat_streak"], 2)
+            replay = await Database(self.root).draw(
+                self.user["id"],
+                "c",
+                "replay",
+                start + timedelta(days=8),
+            )
+            self.assertFalse(replay["created"])
+            self.assertEqual(replay["repeat_streak"], 2)
+            guaranteed = await self.db.draw(
+                self.user["id"],
+                "a",
+                "pity",
+                start + timedelta(days=9),
+            )
+        self.assertTrue(guaranteed["new_species"])
+        self.assertEqual(guaranteed["repeat_streak"], 0)
+        complete = await self.db.draw(
+            self.user["id"],
+            "a",
+            "complete",
+            start + timedelta(days=10),
+            duplicate_rate_cap=0,
+        )
+        self.assertFalse(complete["new_species"])
+        self.write_catalog(["item", "cat", "new"])
+        await self.db.catalog(read_catalog(self.root))
+        added = await self.db.draw(
+            self.user["id"],
+            "a",
+            "added",
+            start + timedelta(days=11),
+            duplicate_rate_cap=0,
+        )
+        self.assertEqual(added["item"]["id"], "new")
+
+    def test_duplicate_settings_validation(self):
+        schema = json.loads((Path(__file__).parents[1] / "_conf_schema.json").read_text("utf-8"))
+        for key, maximum in (("duplicate_rate_cap", 100), ("duplicate_pity", 30)):
+            self.assertEqual(schema[key]["default"], getattr(Settings(), key))
+            for invalid in (-1, maximum + 1, True, 1.5, "2", None):
+                with self.subTest(key=key, invalid=invalid), self.assertRaises(NaiwaError):
+                    Settings.from_dict({key: invalid})
+            for valid in (0, maximum):
+                self.assertEqual(getattr(Settings.from_dict({key: valid}), key), valid)
+
+    async def test_disabled_species_do_not_affect_duplicate_probability(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        first = await self.db.draw(self.user["id"], "a", "first", start)
+        self.write_catalog([first["item"]["id"], "new"])
+        await self.db.catalog(read_catalog(self.root))
+        with patch("core.database.secrets.randbelow", return_value=99) as random:
+            result = await self.db.draw(
+                self.user["id"],
+                "a",
+                "next",
+                start + timedelta(days=1),
+                duplicate_rate_cap=100,
+                duplicate_pity=0,
+            )
+        random.assert_called_once_with(200)
+        self.assertEqual(result["item"]["id"], first["item"]["id"])
+
+    async def test_protection_messages_in_both_display_modes(self):
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        await self.db.draw(self.user["id"], "a", "first", start)
+        with patch("core.database.secrets.randbelow", return_value=0):
+            for offset, expected in ((1, "重复保护 1/2"), (2, "下次领取必出未收集奶娃！")):
+                result = await self.db.draw(
+                    self.user["id"],
+                    "a",
+                    str(offset),
+                    start + timedelta(days=offset),
+                )
+                progress = await self.db.collection(self.user["id"])
+                hosted = today_message(Settings(), self.root, self.user, result, progress)
+                self.assertIn(expected, hosted.text)
+                labels = []
+                original = ImageDraw.ImageDraw.text
+
+                def record(canvas, xy, text, *args, **kwargs):
+                    labels.append(str(text))
+                    return original(canvas, xy, text, *args, **kwargs)
+
+                with patch.object(ImageDraw.ImageDraw, "text", record):
+                    local = today_message(
+                        Settings(display={"draw": False}),
+                        self.root,
+                        self.user,
+                        result,
+                        progress,
+                    )
+                self.assertTrue(local.local)
+                self.assertIn(expected, labels)
+        disabled = today_message(Settings(duplicate_pity=0), self.root, self.user, result, progress)
+        self.assertNotIn("下次领取", disabled.text)
+        progress["unlocked"] = progress["active_total"]
+        complete = today_message(Settings(), self.root, self.user, result, progress)
+        self.assertNotIn("下次领取", complete.text)
+
+    def write_catalog(self, ids):
+        definitions = []
+        for index, item_id in enumerate(ids):
+            Image.new("RGBA", (25, 30), (220, 40 + index, 60, 200)).save(
+                self.root / "catalog" / "images" / f"{item_id}.png"
+            )
+            definitions.append(
+                {
+                    "id": item_id,
+                    "name": item_id,
+                    "description": "固定描述",
+                    "analysis": "固定性格",
+                    "group": "测试",
+                }
+            )
+        self.manifest.write_text(json.dumps(definitions), "utf-8")
+
+    async def test_cross_group_concurrent_draw_is_one_record_even_with_separate_connections(
+        self,
+    ):
+        now = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+        results = await asyncio.gather(
+            *[self.db.draw(self.user["id"], f"group-{i}", f"event-{i}", now) for i in range(32)]
+        )
+        self.assertEqual(sum(r["created"] for r in results), 1)
+        self.assertEqual(len({r["item"]["id"] for r in results}), 1)
+        self.assertEqual((await self.db.collection(self.user["id"]))["total"], 1)
+        await Database(self.root).initialize()
+        again = await Database(self.root).draw(self.user["id"], "group-b", "retry", now)
+        self.assertFalse(again["created"])
+        self.assertEqual(again["count"], 1)
+
+    async def test_east_asia_midnight_and_inactive_history_snapshot(self):
+        before = datetime(2026, 9, 12, 15, 59, 59, tzinfo=timezone.utc)
+        first = await self.db.draw(self.user["id"], "a", "one", before)
+        await self.db.draw(self.user["id"], "a", "two", before + timedelta(seconds=1))
+        await self.db.catalog(
+            [
+                {
+                    "id": "new",
+                    "name": "新奶娃",
+                    "description": "新增",
+                    "analysis": "新增",
+                    "asset": first["item"]["asset"],
+                    "enabled": True,
+                    "sort_order": 0,
+                    "group_name": "测试",
+                    "source": "",
+                    "width": 25,
+                    "height": 30,
+                }
+            ]
+        )
+        old = await self.db.draw(self.user["id"], "b", "three", before)
+        self.assertEqual(old["item"], first["item"])
+        progress = await self.db.collection(self.user["id"])
+        self.assertEqual(progress["total"], 2)
+        self.assertEqual(progress["active_total"], 1)
+        self.assertEqual(progress["unlocked"], 0)
+        self.assertTrue(any(not p["enabled"] and p["count"] for p in progress["entries"]))
+
+    async def test_names_are_not_identity_and_app_ids_are_isolated(self):
+        second = await self.db.identify("app", "second", "group-a", "昵称")
+        foreign = await self.db.identify("other-app", "member", "group-a", "昵称")
+        self.assertEqual(len({self.user["id"], second["id"], foreign["id"]}), 3)
+        updated = await self.db.identify("app", "member", "group-b", "新昵称")
+        blank = await self.db.identify("app", "member", "group-a", "")
+        self.assertEqual(updated["id"], self.user["id"])
+        self.assertEqual(blank["nickname"], "新昵称")
+
+    async def test_rank_uses_global_counts_but_local_participants_and_ties(self):
+        now = datetime.now(timezone.utc)
+        second = await self.db.identify("app", "second", "group-a", "昵称")
+        hidden = await self.db.identify("app", "hidden", "group-other", "别群玩家")
+        for user in (self.user, second, hidden):
+            await self.db.draw(user["id"], "group-other", "event", now)
+        result = await self.db.rankings("app", "group-a")
+        self.assertEqual(len(result["total"]), 2)
+        self.assertEqual([p["rank"] for p in result["total"]], [1, 1])
+        self.assertEqual({p["open_id"] for p in result["total"]}, {"member", "second"})
+        with self.assertRaises(NaiwaError):
+            await self.db.rankings("app", "")
+
+    async def test_bad_manifest_does_not_replace_catalog(self):
+        definitions = json.loads(self.manifest.read_text())
+        definitions.append(definitions[0])
+        self.manifest.write_text(json.dumps(definitions), "utf-8")
+        with self.assertRaises(NaiwaError):
+            await self.db.catalog(read_catalog(self.root))
+        self.assertEqual((await self.db.collection(self.user["id"]))["active_total"], 2)
+        definitions = definitions[:1]
+        definitions[0]["image"] = "../../outside.png"
+        self.manifest.write_text(json.dumps(definitions), "utf-8")
+        with self.assertRaises(NaiwaError):
+            read_catalog(self.root)
+
+    async def test_multiline_names_are_normalized_and_old_snapshots_still_render(self):
+        definitions = json.loads(self.manifest.read_text("utf-8"))[:1]
+        definitions[0]["name"] = "第一行\n第二行\r\n第三行"
+        self.manifest.write_text(json.dumps(definitions), "utf-8")
+        items = read_catalog(self.root)
+        self.assertEqual(items[0]["name"], "第一行 第二行 第三行")
+        # 模拟本次修复前已生效的图库和每日快照。
+        items[0]["name"] = definitions[0]["name"]
+        await self.db.catalog(items)
+        result = await self.db.draw(self.user["id"], "group-a", "event")
+        progress = await self.db.collection(self.user["id"])
+        config = Settings(display={"draw": False, "pen": False})
+        today = today_message(config, self.root, self.user, result, progress)
+        pen = await collection_message(config, self.root, self.user, progress, 1, False)
+        for message in (today, pen):
+            with Image.open(io.BytesIO(message.images[0])) as image:
+                image.verify()
+
+    async def test_corrupt_or_disguised_image_preserves_accepted_catalog(self):
+        definitions = json.loads(self.manifest.read_text("utf-8"))
+        asset_count = len(list((self.root / "assets").iterdir()))
+        with io.BytesIO() as output:
+            Image.new("RGB", (128, 128), "red").save(output, "JPEG")
+            jpeg = output.getvalue()
+        with io.BytesIO() as output:
+            Image.new("RGB", (16, 16), "blue").save(output, "BMP")
+            bmp = output.getvalue()
+        for name, data in (("bad.jpg", jpeg[:-20]), ("disguised.png", bmp)):
+            with self.subTest(name=name):
+                (self.root / "catalog" / name).write_bytes(data)
+                definitions[0]["image"] = name
+                self.manifest.write_text(json.dumps(definitions), "utf-8")
+                with self.assertRaises(NaiwaError):
+                    await self.db.catalog(read_catalog(self.root))
+                self.assertEqual((await self.db.collection(self.user["id"]))["active_total"], 2)
+                self.assertEqual(len(list((self.root / "assets").iterdir())), asset_count)
+
+    async def test_legacy_wrong_suffix_uses_detected_format(self):
+        definitions = json.loads(self.manifest.read_text("utf-8"))
+        Image.new("RGB", (16, 16), "blue").save(self.root / "catalog" / "legacy.png", "WEBP")
+        definitions[0]["image"] = "legacy.png"
+        self.manifest.write_text(json.dumps(definitions), "utf-8")
+        items = read_catalog(self.root)
+        self.assertTrue(items[0]["asset"].endswith(".webp"))
+        await self.db.catalog(items)
+
+    async def test_restore_backup_and_rotation(self):
+        await self.db.draw(self.user["id"], "a", "event")
+        for _ in range(3):
+            backup = await self.db.backup(2)
+        self.assertEqual(len(list((self.root / "backups").glob("*.zip"))), 2)
+        restore_root = self.root / "restored"
+        with zipfile.ZipFile(backup) as archive:
+            archive.extractall(restore_root)
+        restored = Database(restore_root)
+        await restored.initialize()
+        self.assertEqual((await restored.collection(self.user["id"]))["total"], 1)
+        self.assertEqual(len(read_catalog(restore_root)), 2)
+        assets = list((restore_root / "assets").glob("*"))
+        self.assertEqual(len(assets), 2)
+
+    async def test_corrupt_database_is_not_overwritten(self):
+        target = self.root / "broken"
+        target.mkdir()
+        path = target / "naiwa.sqlite3"
+        path.write_bytes(b"not a database")
+        with self.assertRaises(NaiwaError):
+            await Database(target).initialize()
+        self.assertEqual(path.read_bytes(), b"not a database")
+
+    async def test_transaction_rolls_back_if_collection_write_fails(self):
+        await self.db.run(
+            lambda c: c.execute("""
+            CREATE TRIGGER reject_collection BEFORE INSERT ON collections
+            BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END
+        """)
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            await self.db.draw(self.user["id"], "a", "event")
+        count = await self.db.run(
+            lambda c: c.execute("SELECT count(*) FROM draw_records").fetchone()[0]
+        )
+        self.assertEqual(count, 0)
+
+    async def test_atlas_renders_all_slots_without_names_and_hides_locked_items(self):
+        await self.db.draw(self.user["id"], "group-a", "draw")
+        progress = await self.db.collection(self.user["id"])
+        labels = []
+        draw_text = ImageDraw.ImageDraw.text
+
+        def record_text(canvas, xy, text, *args, **kwargs):
+            labels.append(str(text))
+            return draw_text(canvas, xy, text, *args, **kwargs)
+
+        with patch.object(ImageDraw.ImageDraw, "text", record_text):
+            message = await collection_message(
+                Settings(display={"atlas": True}), self.root, self.user, progress, 1, True
+            )
+        self.assertEqual(len(message.images), 1)
+        for item in progress["entries"]:
+            self.assertNotIn(item["name"], labels)
+        self.assertIn("已解锁", labels)
+        self.assertIn("1 / 2", labels)
+        with Image.open(io.BytesIO(message.images[0])) as img:
+            self.assertEqual(img.width, 1080)
+            # 取每个格子左上角内侧的像素：已解锁是素材颜色，未解锁是底色。
+            for i, item in enumerate(progress["entries"]):
+                pixel = img.getpixel((ATLAS_LEFT + 120 * i + 20, 372 + 20))
+                if item["count"]:
+                    self.assertNotEqual(pixel, SURFACE0)
+                else:
+                    self.assertEqual(pixel, SURFACE0)
+        with self.assertRaises(NaiwaError):
+            await collection_message(Settings(), self.root, self.user, progress, 0, True)
+        with self.assertRaises(NaiwaError):
+            await collection_message(
+                Settings(display={"atlas": True}), self.root, self.user, progress, 2, True
+            )
+
+    async def test_locked_atlas_does_not_read_assets_or_reveal_changes_to_them(self):
+        progress = await self.db.collection(self.user["id"])
+        before = await collection_message(Settings(), self.root, self.user, progress, 1, True)
+        for item in progress["entries"]:
+            item["asset"] = "hidden-does-not-exist.png"
+            item["name"] = "不可泄露的名字"
+        after = await collection_message(Settings(), self.root, self.user, progress, 1, True)
+        self.assertEqual(before.images, after.images)
+
+    async def test_pen_only_renders_owned_names_and_empty_pen_is_a_card(self):
+        progress = await self.db.collection(self.user["id"])
+        empty = await collection_message(Settings(), self.root, self.user, progress, 1, False)
+        self.assertEqual(len(empty.images), 1)
+        self.assertTrue(empty.images[0].startswith(b"\x89PNG"))
+        self.assertFalse((self.root / "cards").exists())
+        await self.db.draw(self.user["id"], "a", "draw")
+        progress = await self.db.collection(self.user["id"])
+        labels = []
+        original = ImageDraw.ImageDraw.text
+
+        def record(canvas, xy, text, *args, **kwargs):
+            labels.append(str(text))
+            return original(canvas, xy, text, *args, **kwargs)
+
+        with patch.object(ImageDraw.ImageDraw, "text", record):
+            await collection_message(Settings(), self.root, self.user, progress, 1, False)
+        for item in progress["entries"]:
+            self.assertEqual(item["name"] in labels, bool(item["count"]))
+
+    async def test_current_96_catalog_is_one_card_and_future_expansion_has_navigation(self):
+        progress = await self.db.collection(self.user["id"])
+        template = progress["entries"][0]
+        progress["entries"] = [{**template, "id": f"item-{i}"} for i in range(96)]
+        progress["active_total"] = 96
+        one = await collection_message(
+            Settings(display={"atlas": True}), self.root, self.user, progress, 1, True
+        )
+        self.assertEqual(len(one.images), 1)
+        self.assertEqual(len(one.keyboard["content"]["rows"]), 2)
+        progress["entries"] += [{**template, "id": f"extra-{i}"} for i in range(100)]
+        progress["active_total"] = 196
+        last = await collection_message(
+            Settings(display={"atlas": True}), self.root, self.user, progress, 2, True
+        )
+        self.assertEqual(
+            last.keyboard["content"]["rows"][-1]["buttons"][0]["action"]["data"], "奶娃图鉴 1"
+        )
+
+    async def test_all_bundled_assets_validate_and_existing_catalog_is_preserved(self):
+        resources = Path(__file__).resolve().parents[1] / "resources"
+        other = self.root / "bundled"
+        initialize_catalog(other, resources)
+        definitions = read_catalog(other)
+        self.assertEqual(len(definitions), 120)
+        self.assertEqual(definitions[0]["id"], "nw-8-018")
+        manifest = other / "catalog" / "naiwa.json"
+        original = manifest.read_text("utf-8")
+        manifest.write_text("[]", "utf-8")
+        initialize_catalog(other, resources)
+        self.assertEqual(manifest.read_text("utf-8"), "[]")
+        manifest.write_text(original, "utf-8")
+
+
+class ConfigAndButtonsTests(unittest.TestCase):
+    def test_s3_config_trims_pasted_whitespace_and_names_invalid_fields(self):
+        config = {
+            "endpoint": " https://s3.example.com \n",
+            "bucket": " items ",
+            "access_key": " key ",
+            "secret_key": " secret ",
+            "public_base_url": " https://images.example.com ",
+            "region": " auto ",
+        }
+        settings = Settings.from_dict(config)
+        settings.check_host()
+        self.assertEqual(settings.access_key, "key")
+        self.assertEqual(settings.region, "auto")
+        for field, value in (
+            ("bucket", "https://example.com/items"),
+            ("endpoint", "https://s3.example.com?token=x"),
+            ("region", " "),
+        ):
+            with self.assertRaisesRegex(NaiwaError, field):
+                Settings.from_dict({**config, field: value}).check_host()
+
+    def test_diagnostics_hide_secrets_proxy_passwords_and_signed_queries(self):
+        settings = Settings(access_key="ACCESS_PRIVATE", secret_key="SECRET_PRIVATE")
+        detail = safe_detail(
+            "ACCESS_PRIVATE SECRET_PRIVATE https://user:password@proxy.local:8080/path "
+            "https://s3.example.com/a?X-Amz-Signature=hidden-signature&token=hidden-token "
+            "\nAuthorization: Bearer hidden-bearer\nSSL CERTIFICATE_VERIFY_FAILED",
+            settings,
+        )
+        for secret in (
+            "ACCESS_PRIVATE",
+            "SECRET_PRIVATE",
+            "user:password",
+            "hidden-signature",
+            "hidden-token",
+            "hidden-bearer",
+        ):
+            self.assertNotIn(secret, detail)
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", detail)
+        self.assertNotIn("\n", detail)
+
+    def test_today_mentions_requester_and_quotes_all_description_lines(self):
+        result = {
+            "item": {
+                "name": "奶娃",
+                "asset": "item.png",
+                "description": "第一行\n第二行",
+                "analysis": '性格\n<qqbot-at-user id="someone" />',
+            },
+            "created": True,
+            "new_species": True,
+            "day": "2026-09-14",
+            "count": 1,
+        }
+        user = {"id": 1, "open_id": "actual-member", "nickname": "不应出现在正文的昵称"}
+        progress = {"unlocked": 1, "active_total": 96, "total": 1}
+        message = today_message(Settings(), Path("."), user, result, progress)
+        self.assertTrue(message.text.startswith('<qqbot-at-user id="actual-member" />\n'))
+        self.assertNotIn(user["nickname"], message.text)
+        self.assertIn("\n\n### 今日奶娃 · 新收集！\n\n**奶娃**\n\n![奶娃 #640px #640px]", message.text)
+        self.assertIn("> 第一行\n> 第二行\n>\n> 性格\n> ", message.text)
+        self.assertNotIn('<qqbot-at-user id="someone" />', message.text)
+        result["created"] = False
+        repeated = today_message(Settings(), Path("."), user, result, progress)
+        self.assertTrue(repeated.text.startswith('<qqbot-at-user id="actual-member" />\n'))
+        self.assertNotIn("新收集", repeated.text)
+        self.assertIn("今天已经抽过", repeated.text)
+
+    def test_both_rankings_only_show_ten_players_without_pagination(self):
+        user = {"open_id": "requester"}
+        players = [
+            {"id": i, "nickname": f"玩家{i:02d}", "rank": i, "species": 20 - i, "total": 50 - i}
+            for i in range(1, 13)
+        ]
+        labels = []
+        original = ImageDraw.ImageDraw.text
+
+        def record(canvas, xy, text, *args, **kwargs):
+            labels.append(str(text))
+            return original(canvas, xy, text, *args, **kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(ImageDraw.ImageDraw, "text", record),
+        ):
+            message = ranking_message(
+                Settings(display={"ranking": True}),
+                Path(tmp),
+                user,
+                {"species": players, "total": players},
+                {},
+            )
+        self.assertEqual(labels.count("玩家10"), 2)
+        self.assertNotIn("玩家11", labels)
+        self.assertNotIn("玩家12", labels)
+        self.assertIn("收集种类榜", labels)
+        self.assertIn("累计数量榜", labels)
+        self.assertEqual(len(message.keyboard["content"]["rows"]), 2)
+        self.assertFalse(message.local)
+
+    def test_json_config_and_retry_validation(self):
+        settings = Settings.from_dict(
+            {
+                "upload_headers": '{"Authorization":"Bearer secret"}',
+                "success_value": "200",
+            }
+        )
+        self.assertEqual(settings.upload_headers["Authorization"], "Bearer secret")
+        self.assertEqual(settings.success_value, 200)
+        self.assertNotIn("Bearer secret", repr(settings))
+        for bad in (-1, 11, True, "3"):
+            with self.assertRaises(NaiwaError):
+                Settings.from_dict({"image_retry_count": bad})
+
+    def test_button_owner_prefix_and_navigation(self):
+        for config, prefix in (
+            ({}, ""),
+            ({"command_prefix": ""}, ""),
+            ({"command_prefix": "/"}, "/"),
+            ({"command_prefix": "!"}, "!"),
+            ({"command_prefix": "云云 "}, "云云 "),
+        ):
+            board = keyboard(Settings.from_dict(config), "member", "奶娃图鉴", 2, 3)
+            rows = board["content"]["rows"]
+            actions = [b["action"] for row in rows for b in row["buttons"]]
+            self.assertEqual(
+                [a["data"] for a in actions],
+                [
+                    prefix + c
+                    for c in (
+                        "今日奶娃",
+                        "奶娃图鉴",
+                        "奶娃排行",
+                        "我的展柜",
+                        "奶娃图鉴 1",
+                        "奶娃图鉴 3",
+                    )
+                ],
+            )
+            self.assertTrue(all(a["type"] == 2 for a in actions))
+            for button in rows[-1]["buttons"]:
+                self.assertEqual(button["action"]["permission"]["specify_user_ids"], ["member"])
+                self.assertNotIn("enter", button["action"])
+        self.assertNotIn("{{image:0}}", md("{{image:0}}"))
+
+
+if __name__ == "__main__":
+    unittest.main()

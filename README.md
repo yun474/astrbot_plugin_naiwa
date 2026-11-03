@@ -1,0 +1,217 @@
+<div align="center">
+
+<img src="logo.png" width="128" alt="今日奶娃" />
+
+# 🐲 今日奶娃
+
+**每天领一只奶娃，把日子攒成一座展馆。**
+
+✨ [AstrBot](https://github.com/AstrBotDevs/AstrBot) · QQ 官方机器人 / 其他群聊平台 · 每日抽奶娃与跨群收藏 ✨
+
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-a3be8c.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-89b4fa.svg)](https://www.python.org/)
+[![AstrBot 3.5.3+](https://img.shields.io/badge/AstrBot-3.5.3%2B-f2cd94.svg)](https://github.com/AstrBotDevs/AstrBot)
+[![作者 yun474](https://img.shields.io/badge/作者-yun474-f5b7c7.svg)](https://github.com/yun474)
+
+<img src="https://count.getloli.com/@yun474_astrbot_plugin_naiwa?name=yun474_astrbot_plugin_naiwa&theme=asoul&padding=7&offset=0&align=center&scale=1&pixelated=1&darkmode=auto" alt="访问计数小人" />
+
+[功能亮点](#features) · [效果预览](#preview) · [安装使用](#usage) · [图床配置](#r2) · [图库维护](#catalog) · [数据备份](#backup) · [素材来源](#sources)
+
+</div>
+
+---
+
+<a id="features"></a>
+
+## ✨ 能玩什么
+
+- 每天抽一只奶娃：名画里的奶蛙、换了场景的奶蛙、群里流传的奶龙梗图，一共 120 件，每件都配了小标题和一段签语。
+- 当天重复使用会看到同一只，收藏跨群共享。
+- 在图鉴里查看解锁进度，在展柜里翻看已收藏的奶娃。
+- 查看种类榜和数量榜，也可以设置自己的展示称呼。
+
+<a id="preview"></a>
+
+## 🍮 效果预览
+
+<table>
+  <tr>
+    <th>🎨 今日奶娃</th>
+    <th>📖 奶娃图鉴</th>
+    <th>🏛️ 我的展柜</th>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/images/today.png" width="270" alt="今日奶娃效果" /></td>
+    <td valign="top"><img src="docs/images/atlas.png" width="270" alt="奶娃图鉴效果" /></td>
+    <td valign="top"><img src="docs/images/pen.png" width="270" alt="我的展柜效果" /></td>
+  </tr>
+</table>
+
+<img src="docs/images/ranking.png" width="600" alt="奶娃排行效果" />
+
+<a id="usage"></a>
+
+## 🚀 安装与使用
+
+在 AstrBot 插件管理中使用仓库地址 `https://github.com/yun474/astrbot_plugin_naiwa` 安装。需要 AstrBot 3.5.3 或更新版本。可以和《小猪收集册》同时启用，两者指令互不冲突。
+
+在群里 @机器人发送：
+
+| 指令 | 用途 |
+| --- | --- |
+| `今日奶娃` / `抽奶娃` | 抽取当天的奶娃 |
+| `奶娃图鉴 [页码]` | 查看全部奶娃和解锁进度 |
+| `我的展柜 [页码]` | 查看自己的收藏 |
+| `奶娃排行` | 查看种类榜和数量榜 |
+| `奶娃称呼 名字` | 设置展示称呼，限 1–24 字 |
+| `奶娃重载` | 管理员应用图库修改 |
+| `奶娃备份` | 管理员创建本地备份 |
+| `奶娃诊断` | 管理员检查图床上传与 QQ 图片发送 |
+| `奶娃素材库 [删除缓存/删除全部]` | 管理员查看或清理本机器人 QQ 素材库（可在配置中关闭） |
+
+每天按东八区自然日计算抽取次数。同一 QQ 官方机器人应用（或同一个 AstrBot 平台实例）下，收藏和每日抽取结果跨群共享；不同平台之间的收藏互不相通。
+
+每日抽取默认开启重复保护：重复概率不超过 20%，连续两次抽到已拥有的奶娃后，下次必出未收集的奶娃（如有）。实际重复概率为「已拥有的启用种类数 / 启用总种类数」与配置上限的较小值，新玩家不会被提高重复概率。先决定抽新奶娃还是重复的奶娃，再在对应池内等概率抽取。
+
+保底按实际抽取次数计算，已有历史也计入；漏签不清零，同一天重复查看不累计。停用的奶娃不参与抽池及概率分母。全部集齐后正常抽取重复的奶娃，添加新奶娃后自动恢复保护。配置调整不会重抽当天结果。图床消息与直接发送的卡片都会在仍有新奶娃时显示重复保护进度。
+
+<a id="r2"></a>
+
+## 🎛️ 图片发送方式与图床配置
+
+插件可以直接向 QQ 发送图片，也可以通过图床发送带快捷按钮的消息。在插件配置的「消息展示」中，分别设置「今日奶娃」「奶娃图鉴」「我的展柜」「奶娃排行」是否使用图床。默认只有「今日奶娃」开启图床，并使用免配置的「QQ 素材库」，装好即可直接使用。
+
+### QQ 素材库（默认，免配置）
+
+「QQ 素材库」使用 QQ 官方机器人自带的 [素材管理接口](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/material-management.html)，无需自建图床，也无需填写任何参数：插件直接沿用 AstrBot 中已配置的 QQ 官方机器人 AppID 与凭据，接入多个机器人时按各自账号分别处理。默认每张图片随消息上传，消息发送结束后立即尝试删除，平台已为发出的消息保存图片副本，删除不影响群内已发送的图片。清理超时或失败时会转入后台重试，避免拖住回复；插件还会定期回收本插件超过 10 分钟的残留素材，跳过当前仍在发送的图片。
+
+- **100 张限制：** QQ 官方规定每个机器人最多保存 100 张有效素材，同一机器人上的其他插件共用这一额度。本插件同时最多处理 3 个请求，每条消息结束即删除，同一时间通常只临时占用几张；如因中断留下残图，插件重启后首次使用时会自动清理 10 分钟前上传、文件名以 `naiwa-` 开头的图片，不会删除其他插件的素材。
+- **奶娃图缓存：** 「QQ 素材库配置」中的「奶娃图缓存时间」可设为 0–1440 分钟，默认 0 为即用即删。设置后，同一只奶娃在缓存期内复用同一张素材，到期自动删除，可减少重复上传；图鉴、展柜、排行卡片每次内容不同，始终即用即删。每张缓存奶娃图占用一格共用额度，额度已满时插件会先释放自己的缓存再重试；插件停用或重载时也会尽量删除缓存。
+- **频率限制：** 官方文档目前没有说明素材接口的调用频率限制，我们也还不清楚是否存在。每张图片需要额外调用申请上传、完成上传和删除三个接口；开启奶娃图缓存可减少这部分调用。
+- **自动降级：** 遇到频率限制、素材库已满或机器人没有接口权限时，插件会自动改为直接发送卡片图片（不带 Markdown 和按钮），保证消息照常送达，并在日志中记录原因。`奶娃诊断` 不会降级，会直接提示具体原因。
+- **查看与清理：** 管理员发送 `奶娃素材库`，可查看本机器人素材库的总占用、本插件（含缓存奶娃图）和其他插件各占几张，以及待清理的残留。发送 `奶娃素材库 删除缓存` 删除本插件的全部素材；发送 `奶娃素材库 删除全部` 清空整个素材库，**其他插件上传的素材也会被删除**，请谨慎使用。两种清理都会跳过正在发送的图片。该指令可在「图床配置 → QQ 素材库配置」中关闭；关闭后插件不响应该指令，切换到其他图床后仍按已保存的开关处理。
+
+素材接口刚上线不久，如果你遇到限流、额度或图片显示等问题，欢迎到 [Issues](https://github.com/yun474/astrbot_plugin_naiwa/issues) 提交反馈，最好附上相关日志。
+
+### 自建图床
+
+需要在插件配置中填写 R2 / S3 或 HTTP 图床信息；图片公网地址必须能由 QQ 直接访问。使用 R2 时，`endpoint` 填上传接口，`public_base_url` 填已绑定存储桶的公网域名，两者不要填反。若把图鉴、展柜或排行也设为图床模式，建议给 R2 的 `naiwa/temp/` 设置 7 天后删除的生命周期规则，避免临时卡片长期占用空间。
+
+QQ 官方机器人以外的平台（如 aiocqhttp / NapCat 等）会忽略图床配置，所有卡片都通过 AstrBot 直接发图，没有快捷按钮；`奶娃诊断` 只用于 QQ 官方机器人。
+
+快捷按钮会按「快捷指令唤醒词」生成命令。默认留空即可在 @机器人后直接使用；如果 AstrBot 设置了 `/`、`!` 等唤醒词，请在这里填写相同内容。
+
+## ⚙️ 配置项说明
+
+以下是插件配置页中的选项及默认值。使用默认的「QQ 素材库」或不使用图床时，图床相关选项均无需填写；不使用图床时关闭四个「使用图床」开关即可。
+
+| 消息与日常设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `duplicate_rate_cap`（重复概率上限） | `20` | 0–100，单位 %；0=有新奶娃必出新奶娃，100=自然重复概率。集齐后不受上限限制 |
+| `duplicate_pity`（连续重复保底次数） | `2` | 0–30；连续重复达到此次数，下次必出新奶娃（如有）；0=关闭保底 |
+| 今日奶娃使用图床 | 开启 | 通过图床发送，附带快捷按钮；关闭后直接发送图片 |
+| 奶娃图鉴 / 我的展柜 / 奶娃排行使用图床 | 关闭 | 可分别开启；开启后通过图床发送并附带快捷按钮 |
+| `command_prefix`（快捷指令唤醒词） | 留空 | 使用自定义唤醒词时，填与 AstrBot 相同的内容 |
+| `backup_keep`（本地备份保留份数） | `7` | 自动和手动备份最多保留的份数 |
+
+**图床配置：** 打开「展开图床配置」，在 `image_host.provider` 中选择图床，页面只显示对应参数。收起仅影响显示，不会停用图床。各类型独立保存，切换回来无需重填；四个消息功能共用当前选中的图床。默认使用 QQ 素材库，如需改用自建图床，在此切换即可。
+
+可选 QQ 素材库（默认）、Cloudflare R2、AWS S3、阿里云 OSS、腾讯云 COS、七牛云 Kodo、MinIO、Backblaze B2、DigitalOcean Spaces、其他 S3 兼容存储、兰空 Lsky Pro V2 和自定义 HTTP。对象存储通过 S3 兼容接口上传，请使用服务商提供的 S3 端点与凭据。
+
+旧版配置首次加载时自动保存到「其他 S3 兼容存储」和「自定义 HTTP」分组，保留原选中的上传方式；已有新分组配置优先。旧 R2 配置会保留在「其他 S3 兼容存储」中，仍可照常使用。
+
+**对象存储：** 参数位于 `image_host` 下的对应分组（`r2`、`aws`、`oss`、`cos`、`qiniu`、`minio`、`b2`、`spaces`、`s3`）：
+
+| 配置项 | 默认值 | 填写内容 |
+| --- | --- | --- |
+| `endpoint` | 留空 | 上传接口；R2 格式为 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `bucket` | 留空 | 存储桶名称 |
+| `access_key` / `secret_key` | 留空 | 存储桶的上传凭据 |
+| `public_base_url` | 留空 | 可公开访问图片的域名，如 `https://img.example.com` |
+| `region` | 按类型预设 | R2 为 `auto`；OSS、MinIO、通用 S3 为 `us-east-1`；其他类型填写实际区域 |
+| `addressing_style` | `auto` | 自动按类型选择；OSS 固定为 `virtual`，其他类型可手动指定 |
+
+阿里云 OSS 使用 S3 V2 签名与虚拟主机寻址，遵循其 [S3 兼容接口要求](https://www.alibabacloud.com/help/en/oss/developer-reference/compatibility-with-amazon-s3)。其他对象存储使用 S3 V4 签名。
+
+**兰空 Lsky Pro V2：** 在 `image_host.lsky` 填写完整上传地址（例如 `https://你的图床/api/v1/upload`）和 Authorization 值（例如 `Bearer 你的Token`）。插件自动设置文件字段、响应路径与成功状态检查。
+
+**自定义 HTTP：** 在 `image_host.http` 中按上传 API 填写：
+
+| 配置项 | 默认值 | 填写内容 |
+| --- | --- | --- |
+| `upload_url` | 留空 | 完整的上传地址 |
+| `upload_mode` | `multipart` | 文件上传用 `multipart`；要求 Base64 JSON 时选 `json_base64` |
+| `upload_headers` / `upload_fields` | `{}` / `{}` | 图床要求的请求头和附加字段，均填写 JSON 对象 |
+| `file_field` | `file` | 图片字段名 |
+| `response_url_path` | `data.links.url` | 上传结果中图片直链的位置，如 `image.url` |
+| `success_path` / `success_value` | 留空 / `true` | 图床返回成功标记时填写；无成功标记可留空 `success_path` |
+
+**重试与缓存：** 打开「展开重试与缓存设置」后显示，一般保持默认即可。上传重试和请求超时也用于 QQ 直传，因此独立于图床选择保存。
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `upload_retry_count` / `image_retry_count` | `2` / `3` | 上传失败、QQ 图片发送失败后的额外重试次数；`0` 表示不重试 |
+| `retry_base_delay` / `request_timeout` | `1` 秒 / `20` 秒 | 重试等待的基础间隔、单次网络请求的超时时间 |
+| `cache_ttl_hours` | `168` 小时 | 奶娃原图的图床链接缓存时间；应短于图床链接有效期 |
+| `temp_cache_hours` | `12` 小时 | 临时卡片链接复用时间；不会自动删除图床图片 |
+
+<a id="catalog"></a>
+
+## 🧩 图库维护
+
+首次启动会在 `data/plugin_data/astrbot_plugin_naiwa/catalog/` 生成图库，内置素材会转成 JPEG 保存在 `images/`。管理员可编辑 `naiwa.json` 和 `images/` 中的图片，再发送 `奶娃重载` 应用修改。
+
+每件奶娃包含这些字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 唯一编号，只能用小写字母、数字、`-` 和 `_`；请勿把旧 `id` 分配给另一件奶娃，以免合并原有收藏 |
+| `name` | 名称，1–40 字 |
+| `description` | 小标题，0–40 字，可以留空 |
+| `analysis` | 签语，1–600 字 |
+| `group` | 分组，1–20 字，例如 `壹·圣典`、`梗图`；分组为 `原版` 时卡片上只显示「原版」 |
+| `source` | 来源仓库，可留空；卡片底部按来源署名 |
+| `image` | 图片路径，支持 PNG / JPEG / WebP，单张不超过 10 MB |
+| `enabled` / `sort_order` | 是否启用、图鉴排序 |
+
+新增奶娃时添加新条目和图片；下架时将对应条目的 `enabled` 设为 `false`。历史收藏不会因下架而删除。
+
+<a id="backup"></a>
+
+## 💾 数据备份
+
+插件会在启动时及之后每 24 小时自动备份；也可以发送 `奶娃备份`。备份文件位于插件数据目录的 `backups/`，包含收藏数据、图库和历史图片。恢复时先停用插件，保留原数据目录作回退，再将可信备份解压到新的空插件数据目录，最后启用插件。图床凭据保存在 AstrBot 配置中，不包含在备份里。
+
+<a id="sources"></a>
+
+## 🖼️ 素材来源
+
+内置的 120 件素材来自以下仓库，经过筛选、缩放后收录；名称、小标题和签语为本插件重新撰写：
+
+| 来源 | 数量 | 许可与说明 |
+| --- | --- | --- |
+| [Nailong-Studio/NaiLoong-Universe](https://github.com/Nailong-Studio/NaiLoong-Universe)（奶蛙艺术圣殿） | 93 | MIT。名画、场景与表情；奶蛙为民间二创形象，角色原型权利归原权利人 |
+| [GeorgeNaNN/nailong-memes](https://github.com/GeorgeNaNN/nailong-memes) | 27 | 「来只奶龙」插件的默认图库，仓库标注 MIT，内容为网络收集的表情包 |
+
+逐件来源与原图链接见 [`resources/CREDITS.md`](resources/CREDITS.md)。如果你是权利人并认为某件素材不宜收录，请提交 [Issue](https://github.com/yun474/astrbot_plugin_naiwa/issues)，核实后会尽快下架。
+
+## 💛 致谢
+
+- 玩法与代码基于 [yun474/astrbot_plugin_piggy](https://github.com/yun474/astrbot_plugin_piggy)（小猪收集册）。
+- 感谢 [奶蛙艺术圣殿](https://github.com/Nailong-Studio/NaiLoong-Universe) 整理的馆藏，以及 [George](https://github.com/GGGeeeooorrrgggeee) 为「来只奶龙」收集的表情包图库。
+- 卡片配色取自奶蛙艺术圣殿的 `palette.json`。
+
+项目代码遵循 [AGPL-3.0 许可证](LICENSE)；随包字体 [Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc) 遵循 `resources/fonts/OFL.txt` 中的 SIL Open Font License。
+
+---
+
+<div align="center">
+
+喜欢的话，给云云点一颗 ⭐ 吧！
+
+[更新日志](CHANGELOG.md) · [反馈问题](https://github.com/yun474/astrbot_plugin_naiwa/issues) · [AGPL-3.0 License](LICENSE)
+
+**交流催更 QQ 群：947667614**
+> 有插件问题/bug/建议请优先提交issue，加群请注明来意。
+
+</div>
